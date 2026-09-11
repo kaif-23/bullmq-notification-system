@@ -4,6 +4,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "worker": "tsx watch src/workers/email.worker.ts",
     "start": "tsx dist/server.js",
     "build": "tsc"
   },
