@@ -68,6 +68,41 @@ app.get("/test-delayed", async (req, res) => {
         jobId: job.id
     });
 });
+app.get("/test-priority", async (req, res) => {
+    await emailQueue.add(
+        "marketing-email",
+        {
+            email: "marketing@gmail.com"
+        },
+        {
+            priority: 10
+        }
+    );
+
+    await emailQueue.add(
+        "welcome-email",
+        {
+            email: "welcome@gmail.com"
+        },
+        {
+            priority: 5
+        }
+    );
+
+    await emailQueue.add(
+        "password-reset",
+        {
+            email: "security@gmail.com"
+        },
+        {
+            priority: 1
+        }
+    );
+
+    res.json({
+        message: "Priority test jobs added"
+    });
+});
 
 app.listen(PORT,()=>{
     console.log(`notification service is running on http://localhost:${PORT}`);
