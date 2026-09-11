@@ -1,33 +1,29 @@
 import { Worker } from "bullmq";
-import { redisConnection } from "../config/redis";
+import { redisConnection } from "../config/redis.js";
 
 const worker = new Worker(
     "email",
     async (job) => {
-        console.log("-----------------------------");
-        console.log("Processing job:", job.id);
-        console.log("Job name:", job.name);
-        console.log("Attempt:", job.attemptsMade + 1);
-        console.log("Job data:", job.data);
+        const start = Date.now();
 
-        if (
-            job.data.simulateTransientFailure &&
-            job.attemptsMade < 2
-        ) {
-            console.log("Simulating temporary failure...");
-
-            throw new Error("Email provider temporarily unavailable");
-        }
+        console.log(
+            `[START] Job ${job.id} | ${new Date().toLocaleTimeString()}`
+        );
 
         console.log(`Sending email to ${job.data.email}`);
 
+        // Simulate email API taking 2 seconds
         await new Promise((resolve) => setTimeout(resolve, 2000));
 
-        console.log("Email sent successfully");
-        console.log("-----------------------------");
+        const duration = Date.now() - start;
+
+        console.log(
+            `[DONE] Job ${job.id} | took ${duration}ms`
+        );
     },
     {
-        connection: redisConnection
+        connection: redisConnection,
+        concurrency: 5
     }
 );
 

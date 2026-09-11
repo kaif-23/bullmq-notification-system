@@ -31,6 +31,27 @@ app.get('/',async (req,res)=>{
     })
 });
 
+app.get("/test-bulk", async (req, res) => {
+    const start = Date.now();
+
+    const jobs = [];
+
+    for (let i = 1; i <= 20; i++) {
+        const job = await emailQueue.add("welcome-email", {
+            email: `user${i}@gmail.com`,
+            name: `User ${i}`
+        });
+
+        jobs.push(job.id);
+    }
+
+    res.json({
+        message: "20 jobs added",
+        duration: `${Date.now() - start}ms`,
+        jobIds: jobs
+    });
+});
+
 app.listen(PORT,()=>{
     console.log(`notification service is running on http://localhost:${PORT}`);
 });
