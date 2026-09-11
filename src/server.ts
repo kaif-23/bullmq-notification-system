@@ -36,7 +36,7 @@ app.get("/test-bulk", async (req, res) => {
 
     const jobs = [];
 
-    for (let i = 1; i <= 20; i++) {
+    for (let i = 1; i <= 10; i++) {
         const job = await emailQueue.add("welcome-email", {
             email: `user${i}@gmail.com`,
             name: `User ${i}`

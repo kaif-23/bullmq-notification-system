@@ -13,7 +13,7 @@ const worker = new Worker(
         console.log(`Sending email to ${job.data.email}`);
 
         // Simulate email API taking 2 seconds
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await new Promise((resolve) => setTimeout(resolve, 100));
 
         const duration = Date.now() - start;
 
@@ -23,7 +23,11 @@ const worker = new Worker(
     },
     {
         connection: redisConnection,
-        concurrency: 1
+        concurrency: 5,
+        limiter: {
+            max: 2,
+            duration: 1000
+        }
     }
 );
 
