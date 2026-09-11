@@ -1,0 +1,24 @@
+node_modules/
+dist/
+build/
+
+# Environment variables and local secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# TypeScript build metadata
+*.tsbuildinfo
+
+# Coverage and test output
+coverage/
+
+# Editors and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
