@@ -52,6 +52,23 @@ app.get("/test-bulk", async (req, res) => {
     });
 });
 
+app.get("/test-delayed", async (req, res) => {
+    const job = await emailQueue.add(
+        "verification-reminder",
+        {
+            email: "user@gmail.com"
+        },
+        {
+            delay: 10000
+        }
+    );
+
+    res.json({
+        message: "Delayed email job added",
+        jobId: job.id
+    });
+});
+
 app.listen(PORT,()=>{
     console.log(`notification service is running on http://localhost:${PORT}`);
 });
