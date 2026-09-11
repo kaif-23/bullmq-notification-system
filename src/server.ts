@@ -8,10 +8,21 @@ const PORT=3000;
 
 app.get('/',async (req,res)=>{
     
-    const job = await emailQueue.add("welcome-email", {
-        email: "user@gmail.com",
-        name: "Kaif"
-    });
+    const job = await emailQueue.add(
+        "welcome-email",
+        {
+            email: "user@gmail.com",
+            name: "Kaif",
+            simulateTransientFailure: true
+        },
+        {
+            attempts: 3,
+            backoff: {
+                type: "fixed",
+                delay: 2000
+            }
+        }
+    );
 
 
     res.json({
