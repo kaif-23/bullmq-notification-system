@@ -1,7 +1,7 @@
 import express from 'express';
 import {emailQueue} from './queues/email.queue.js';
 import { db } from "./config/database.js";
-import { createNotification } from "./services/notifications.service.js";
+import { createNotification,claimNotification } from "./services/notifications.service.js";
 
 
 const app=express();
@@ -190,7 +190,7 @@ app.get("/test-db", async (req, res) => {
 });
 app.get("/send-notification", async (req, res) => {
     try {
-        const idempotencyKey = "notification-user-457";
+        const idempotencyKey = "notification-claim-001";
 
         const notification = await createNotification(
             idempotencyKey,
@@ -262,6 +262,60 @@ app.get("/test-db-failure", async (req, res) => {
 
         res.status(500).json({
             message: "Failed"
+        });
+    }
+});
+app.get("/test-claim", async (req, res) => {
+    try {
+        const claimed = await claimNotification(1);
+
+        res.json({
+            notificationId: 1,
+            claimed
+        });
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            message: "Claim failed"
+        });
+    }
+});
+app.get("/test-concurrent-claim", async (req, res) => {
+    try {
+        const idempotencyKey = "notification-concurrent-002";
+
+        const notification = await createNotification(
+            idempotencyKey,
+            "concurrent@gmail.com",
+            "verification-email"
+        );
+
+        await emailQueue.add(
+            "verification-email",
+            {
+                notificationId: notification.id,
+                email: notification.email
+            }
+        );
+
+        await emailQueue.add(
+            "verification-email",
+            {
+                notificationId: notification.id,
+                email: notification.email
+            }
+        );
+
+        res.json({
+            message: "Two jobs created for one notification",
+            notificationId: notification.id
+        });
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            message: "Test failed"
         });
     }
 });

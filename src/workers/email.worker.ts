@@ -1,6 +1,7 @@
 import { Worker } from "bullmq";
 import { redisConnection } from "../config/redis.js";
 import { db } from "../config/database.js";
+import { claimNotification } from "../services/notifications.service.js"
 
 const worker = new Worker(
     "email",
@@ -11,15 +12,17 @@ const worker = new Worker(
             `[START] Job ${job.id} | ${new Date().toLocaleTimeString()}`
         );
     
-        await db.query(
-            `
-    UPDATE notifications
-    SET status = 'processing',
-        updated_at = NOW()
-    WHERE id = $1
-    `,
-            [job.data.notificationId]
+        const claimed = await claimNotification(
+            job.data.notificationId
         );
+
+        if (!claimed) {
+            console.log(
+                `[SKIP] Notification ${job.data.notificationId} already claimed`
+            );
+
+            return;
+        }
         try{
             console.log(`Sending email to ${job.data.email}`);
             if (
@@ -67,7 +70,7 @@ const worker = new Worker(
     },
     {
         connection: redisConnection,
-        concurrency: 1,
+        concurrency: 2,
        
     }
 );

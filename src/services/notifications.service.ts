@@ -18,3 +18,20 @@ export async function createNotification(
 
     return result.rows[0];
 }
+export async function claimNotification(
+    notificationId: number
+): Promise<boolean> {
+    const result = await db.query(
+        `
+        UPDATE notifications
+        SET status = 'processing',
+            updated_at = NOW()
+        WHERE id = $1
+          AND status = 'pending'
+        RETURNING id
+        `,
+        [notificationId]
+    );
+
+    return result.rowCount === 1;
+}
