@@ -1,15 +1,15 @@
 import express from 'express';
-import {emailQueue} from './queues/email.queue.js';
+import { emailQueue } from './queues/email.queue.js';
 import { db } from "./config/database.js";
-import { createNotification,claimNotification } from "./services/notifications.service.js";
+import { createNotification, claimNotification, createNotificationWithOutbox } from "./services/notifications.service.js";
+import { getPendingOutboxEvents, claimPendingOutboxEvents, recoverStuckOutboxEvents } from "./services/outbox.service.js";
 
+const app = express();
 
-const app=express();
+const PORT = 3000;
 
-const PORT=3000;
+app.get('/', async (req, res) => {
 
-app.get('/',async (req,res)=>{
-    
     const job = await emailQueue.add(
         "welcome-email",
         {
@@ -190,30 +190,26 @@ app.get("/test-db", async (req, res) => {
 });
 app.get("/send-notification", async (req, res) => {
     try {
-        const idempotencyKey = "notification-claim-001";
+        const idempotencyKey = req.header("Idempotency-Key");
 
-        const notification = await createNotification(
-            idempotencyKey,
-            "user@gmail.com",
-            "verification-email"
-        );
+        if (!idempotencyKey) {
+            return res.status(400).json({
+                message: "Idempotency-Key header is required"
+            });
+        }
 
-        const job = await emailQueue.add(
-            "verification-email",
-            {
-                notificationId: notification.id,
-                email: notification.email,
-                idempotencyKey: notification.idempotency_key
-            },
-            {
-                jobId: idempotencyKey
-            }
-        );
+        const result =
+            await createNotificationWithOutbox(
+                idempotencyKey,
+                "user@gmail.com",
+                "verification-email"
+            );
 
-        res.json({
-            message: "Notification queued",
-            notification,
-            jobId: job.id
+        res.status(result.created ? 201 : 200).json({
+            message: result.created
+                ? "Notification created"
+                : "Notification already exists",
+            notification: result.notification
         });
     } catch (error) {
         console.error(error);
@@ -265,19 +261,93 @@ app.get("/test-db-failure", async (req, res) => {
         });
     }
 });
-app.get("/test-claim", async (req, res) => {
+// app.get("/test-claim", async (req, res) => {
+//     try {
+//         const claimed = await claimNotification(1);
+
+//         res.json({
+//             notificationId: 1,
+//             claimed
+//         });
+//     } catch (error) {
+//         console.error(error);
+
+//         res.status(500).json({
+//             message: "Claim failed"
+//         });
+//     }
+// });
+// app.get("/test-retry", async (req, res) => {
+//     try {
+//         const idempotencyKey = `retry-${Date.now()}`;
+
+//         const notification =
+//             await createNotificationWithOutbox(
+//                 idempotencyKey,
+//                 "retry@gmail.com",
+//                 "verification-email"
+//             );
+
+//         await emailQueue.add(
+//             "verification-email",
+//             {
+//                 notificationId: notification.id,
+//                 email: notification.email,
+//                 shouldFail: true
+//             },
+//             {
+//                 attempts: 3,
+//                 backoff: {
+//                     type: "fixed",
+//                     delay: 2000
+//                 }
+//             }
+//         );
+
+//         res.json({
+//             message: "Retry test created",
+//             notificationId: notification.id
+//         });
+//     } catch (error) {
+//         console.error(error);
+
+//         res.status(500).json({
+//             message: "Retry test failed"
+//         });
+//     }
+// });
+app.get("/test-rate-limit", async (req, res) => {
     try {
-        const claimed = await claimNotification(1);
+        for (let i = 1; i <= 6; i++) {
+            const idempotencyKey = `rate-limit-${Date.now()}-${i}`;
+
+            const notification =
+                await createNotificationWithOutbox(
+                    idempotencyKey,
+                    `rate-${i}@gmail.com`,
+                    "verification-email"
+                );
+
+            await emailQueue.add(
+                "verification-email",
+                {
+                    notificationId: notification.id,
+                    email: notification.email
+                },
+                {
+                    attempts: 1
+                }
+            );
+        }
 
         res.json({
-            notificationId: 1,
-            claimed
+            message: "6 jobs created"
         });
     } catch (error) {
         console.error(error);
 
         res.status(500).json({
-            message: "Claim failed"
+            message: "Rate limit test failed"
         });
     }
 });
@@ -319,6 +389,164 @@ app.get("/test-concurrent-claim", async (req, res) => {
         });
     }
 });
+app.get("/test-transaction-rollback", async (req, res) => {
+    const client = await db.connect();
+
+    try {
+        await client.query("BEGIN");
+
+        const result = await client.query(
+            `
+            INSERT INTO notifications
+                (idempotency_key, email, type)
+            VALUES
+                ($1, $2, $3)
+            RETURNING id
+            `,
+            [
+                "transaction-test-001",
+                "transaction@gmail.com",
+                "test-email"
+            ]
+        );
+
+        const notificationId = result.rows[0].id;
+
+        console.log(
+            "Notification inserted:",
+            notificationId
+        );
+
+        // Intentionally invalid notification ID
+        await client.query(
+            `
+            INSERT INTO notification_outbox
+                (notification_id, event_type, payload)
+            VALUES
+                ($1, $2, $3)
+            `,
+            [
+                999999,
+                "test-email",
+                JSON.stringify({
+                    email: "transaction@gmail.com"
+                })
+            ]
+        );
+
+        await client.query("COMMIT");
+
+        res.json({
+            message: "Transaction committed"
+        });
+    } catch (error) {
+        await client.query("ROLLBACK");
+
+        console.error("Transaction rolled back:", error);
+
+        res.status(500).json({
+            message: "Transaction rolled back"
+        });
+    } finally {
+        client.release();
+    }
+});
+app.get("/test-outbox", async (req, res) => {
+    try {
+        const events = await getPendingOutboxEvents();
+
+        res.json({
+            count: events.length,
+            events
+        });
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            message: "Failed to read outbox"
+        });
+    }
+});
+app.get("/test-outbox-claim", async (req, res) => {
+    try {
+        const events = await claimPendingOutboxEvents();
+
+        res.json({
+            count: events.length,
+            events
+        });
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            message: "Outbox claim failed"
+        });
+    }
+});
+app.get("/test-outbox-recovery", async (req, res) => {
+    try {
+        const recovered = await recoverStuckOutboxEvents();
+
+        res.json({
+            count: recovered.length,
+            recovered
+        });
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            message: "Recovery failed"
+        });
+    }
+});
+
+app.get("/queue-stats", async (req, res) => {
+    try {
+        const counts = await emailQueue.getJobCounts(
+            "waiting",
+            "active",
+            "completed",
+            "failed",
+            "delayed"
+        );
+
+        res.json(counts);
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            message: "Failed to get queue stats"
+        });
+    }
+});
+app.get("/queue-jobs", async (req, res) => {
+    try {
+        const jobs = await emailQueue.getJobs([
+            "waiting",
+            "active",
+            "completed",
+            "failed",
+            "delayed"
+        ], 0, 9);
+
+        res.json(
+            jobs.map((job) => ({
+                id: job.id,
+                name: job.name,
+                data: job.data,
+                attemptsMade: job.attemptsMade,
+                failedReason: job.failedReason,
+                timestamp: job.timestamp
+            }))
+        );
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            message: "Failed to get jobs"
+        });
+    }
+});
 db.query("SELECT NOW()")
     .then(() => {
         console.log("PostgreSQL connected");
@@ -326,6 +554,6 @@ db.query("SELECT NOW()")
     .catch((error) => {
         console.error("PostgreSQL connection failed:", error);
     });
-app.listen(PORT,()=>{
+app.listen(PORT, () => {
     console.log(`notification service is running on http://localhost:${PORT}`);
 });

@@ -6,6 +6,7 @@
     "dev": "tsx watch src/server.ts",
     "worker": "tsx watch src/workers/email.worker.ts",
     "events": "tsx watch src/events/email.events.ts",
+    "relay": "tsx watch src/workers/outbox.relay.ts",
     "start": "tsx dist/server.js",
     "build": "tsc"
   },

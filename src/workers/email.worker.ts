@@ -1,7 +1,8 @@
 import { Worker } from "bullmq";
 import { redisConnection } from "../config/redis.js";
 import { db } from "../config/database.js";
-import { claimNotification } from "../services/notifications.service.js"
+import { claimNotification, incrementNotificationAttempts } from "../services/notifications.service.js"
+import { sendEmail } from "../services/email.service.js";
 
 const worker = new Worker(
     "email",
@@ -13,7 +14,8 @@ const worker = new Worker(
         );
     
         const claimed = await claimNotification(
-            job.data.notificationId
+            job.data.notificationId,
+            job.attemptsMade > 0
         );
 
         if (!claimed) {
@@ -23,15 +25,20 @@ const worker = new Worker(
 
             return;
         }
+        await incrementNotificationAttempts(
+            job.data.notificationId
+        );
         try{
             console.log(`Sending email to ${job.data.email}`);
+
             if (
-                job.data.shouldFail &&job.attemptsMade === 0) {
+                job.data.shouldFail &&
+                job.attemptsMade === 0
+            ) {
                 throw new Error("Simulated temporary email failure");
             }
-        // Simulate email API taking 2 seconds
-        await new Promise((resolve) => setTimeout(resolve, 100));
-    
+
+            await sendEmail(job.data.email);
 
         await db.query(
             `
@@ -44,16 +51,6 @@ const worker = new Worker(
         );
 
         } catch (error) {
-            await db.query(
-                `
-        UPDATE notifications
-        SET status = 'failed',
-        updated_at = NOW()
-        WHERE id = $1
-        `,
-                [job.data.notificationId]
-            );
-
             console.error(
                 `[FAILED] Job ${job.id}`,
                 error
@@ -71,8 +68,29 @@ const worker = new Worker(
     {
         connection: redisConnection,
         concurrency: 2,
+        limiter: {
+            max: 2,
+            duration: 1000
+        }
        
     }
 );
 
 console.log("Email worker started");
+process.on("SIGTERM", async () => {
+    console.log("Shutting down worker...");
+
+    await worker.close();
+
+    console.log("Worker shut down");
+    process.exit(0);
+});
+
+process.on("SIGINT", async () => {
+    console.log("Shutting down worker...");
+
+    await worker.close();
+
+    console.log("Worker shut down");
+    process.exit(0);
+});

@@ -1,5 +1,7 @@
-import { QueueEvents } from "bullmq";
+import { Job, QueueEvents } from "bullmq";
 import { redisConnection } from "../config/redis.js";
+import { db } from "../config/database.js";
+import { emailQueue } from "../queues/email.queue.js";
 
 const emailQueueEvents = new QueueEvents("email", {
     connection: redisConnection
@@ -9,10 +11,35 @@ emailQueueEvents.on("completed", ({ jobId }) => {
     console.log(`[EVENT] Job ${jobId} completed`);
 });
 
-emailQueueEvents.on("failed", ({ jobId, failedReason }) => {
-    console.log(
-        `[EVENT] Job ${jobId} failed: ${failedReason}`
-    );
+emailQueueEvents.on("failed", async ({ jobId, failedReason }) => {
+    const job = await Job.fromId(emailQueue, jobId);
+
+    if (!job) {
+        console.log(`[EVENT] Job ${jobId} not found`);
+        return;
+    }
+
+    const maxAttempts = job.opts.attempts ?? 1;
+
+    console.log(`[EVENT] Job ${jobId} failed`);
+    console.log(`Attempts made: ${job.attemptsMade}`);
+    console.log(`Maximum attempts: ${maxAttempts}`);
+
+    if (job.attemptsMade >= maxAttempts) {
+        await db.query(
+            `
+            UPDATE notifications
+            SET status = 'failed',
+                updated_at = NOW()
+            WHERE id = $1
+            `,
+            [job.data.notificationId]
+        );
+
+        console.log(
+            `[EVENT] Notification ${job.data.notificationId} permanently failed`
+        );
+    }
 });
 
 console.log("Email queue event listener started");
