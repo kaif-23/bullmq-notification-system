@@ -2,22 +2,6 @@ import { PoolClient } from "pg";
 import { db } from "../config/database.js";
 import type { OutboxEvent } from "../types/notification.types.js";
 
-// ─── Read ─────────────────────────────────────────────────────────────────────
-
-export async function getPendingOutboxEvents(): Promise<OutboxEvent[]> {
-    const result = await db.query<OutboxEvent>(
-        `
-        SELECT *
-        FROM notification_outbox
-        WHERE status = 'pending'
-        ORDER BY id
-        LIMIT 10
-        `
-    );
-
-    return result.rows;
-}
-
 // ─── Write ────────────────────────────────────────────────────────────────────
 
 /**

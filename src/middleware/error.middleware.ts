@@ -12,6 +12,7 @@ export function errorMiddleware(
     const message = err.message || "Internal Server Error";
 
     res.status(statusCode).json({
+        requestId: res.locals.requestId,
         error: {
             message,
             ...(process.env.NODE_ENV !== "production" && { stack: err.stack })

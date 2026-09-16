@@ -1,9 +1,13 @@
 import { Router } from "express";
 import { asyncHandler } from "../utils/async-handler.js";
-import { sendNotification } from "../controllers/notification.controller.js";
+import {
+	createEmailNotification,
+	getNotificationStatus
+} from "../controllers/notification.controller.js";
 
 const router = Router();
 
-router.get("/send-notification", asyncHandler(sendNotification));
+router.post("/notifications/email", asyncHandler(createEmailNotification));
+router.get("/notifications/:notificationId", asyncHandler(getNotificationStatus));
 
 export default router;

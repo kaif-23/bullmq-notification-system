@@ -1,23 +1,5 @@
 import { emailQueue } from "../queues/email.queue.js";
-import { claimPendingOutboxEvents, getPendingOutboxEvents, markOutboxPublished, recoverStuckOutboxEvents } from "../services/outbox.service.js";
-
-async function publishOutboxEvents() {
-    const events = await getPendingOutboxEvents();
-
-    for (const event of events) {
-        await emailQueue.add(
-            event.event_type,
-            event.payload,
-            {
-                jobId: `outbox-${event.id}`
-            }
-        );
-        await markOutboxPublished(event.id);
-        console.log(
-            `[OUTBOX] Published event ${event.id} → Job outbox-${event.id}`
-        );
-    }
-}
+import { claimPendingOutboxEvents, markOutboxPublished, recoverStuckOutboxEvents } from "../services/outbox.service.js";
 
 async function startRelay() {
     console.log("[OUTBOX] Relay started");

@@ -4,29 +4,11 @@ import type { Notification } from "../types/notification.types.js";
 
 // ─── Create ───────────────────────────────────────────────────────────────────
 
-export async function createNotification(
-    idempotencyKey: string,
-    email: string,
-    type: string
-): Promise<Notification> {
-    const result = await db.query<Notification>(
-        `
-        INSERT INTO notifications
-            (idempotency_key, email, type)
-        VALUES
-            ($1, $2, $3)
-        RETURNING *
-        `,
-        [idempotencyKey, email, type]
-    );
-
-    return result.rows[0];
-}
-
 export async function createNotificationWithOutbox(
     idempotencyKey: string,
     email: string,
-    type: string
+    type: string,
+    requestId?: string
 ): Promise<{ notification: Notification; created: boolean }> {
     const client = await db.connect();
 
@@ -79,7 +61,7 @@ export async function createNotificationWithOutbox(
                     notificationId: notification.id,
                     email: email,
                     type: type,
-                    shouldFail: false
+                    requestId
                 })
             ]
         );

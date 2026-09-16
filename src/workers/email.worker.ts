@@ -18,27 +18,8 @@ const worker = new Worker<EmailJobData>(
         const maxAttempts = job.opts.attempts ?? 1;
 
         console.log(
-            `[WORKER] Job ${job.id} started | attempt ${attempt}/${maxAttempts} | notificationId: ${job.data.notificationId ?? "none"}`
+            `[WORKER] Job ${job.id} started | attempt ${attempt}/${maxAttempts} | notificationId: ${job.data.notificationId} | requestId: ${job.data.requestId ?? "none"}`
         );
-
-        // ── Skip DB tracking for jobs without a notificationId ───────────────
-        // This handles test routes that enqueue jobs directly without
-        // creating a notification row first (e.g. GET /, /test-bulk).
-        if (job.data.notificationId == null) {
-            console.log(
-                `[WORKER] Job ${job.id} has no notificationId — skipping DB tracking`
-            );
-
-            // Still simulate sending the email for test purposes
-            if (job.data.shouldFail || job.data.simulateTransientFailure) {
-                throw new Error("Simulated email failure (no notificationId)");
-            }
-
-            console.log(
-                `[WORKER] Job ${job.id} completed (no DB tracking)`
-            );
-            return;
-        }
 
         // ── Claim the notification ────────────────────────────────────────────
         //
@@ -75,17 +56,6 @@ const worker = new Worker<EmailJobData>(
             console.log(
                 `[WORKER] Job ${job.id} — sending email to ${job.data.email}`
             );
-
-            // shouldFail: true simulates permanent failure on all attempts
-            // (used by /test-failure-event and /test-db-failure routes)
-            if (job.data.shouldFail) {
-                throw new Error("Simulated permanent email failure");
-            }
-
-            // simulateTransientFailure: true only fails on the first attempt
-            if (job.data.simulateTransientFailure && job.attemptsMade === 0) {
-                throw new Error("Simulated transient email failure");
-            }
 
             // Provider idempotency key: stable across retries and replays
             // because it is based on the notification ID, not the job ID.

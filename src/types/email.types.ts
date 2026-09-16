@@ -1,9 +1,8 @@
 export interface EmailJobData {
-    notificationId?: number;
+    notificationId: number;
     email: string;
     type?: string;
-    shouldFail?: boolean;
-    simulateTransientFailure?: boolean;
+    requestId?: string;
     /** Present on DLQ jobs — tracks how many times this notification was replayed */
     replayCount?: number;
     /** Present on DLQ jobs — the original email queue job ID */

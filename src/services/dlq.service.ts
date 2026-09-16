@@ -141,6 +141,7 @@ export async function replayDlqJob(
                 notificationId,
                 email: notification.email,
                 type: notification.type,
+                requestId: jobData.requestId,
                 // replayCount is carried forward so the email.events.ts
                 // handler can propagate it into the next DLQ entry if the
                 // replay job also fails permanently.
