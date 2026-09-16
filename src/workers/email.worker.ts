@@ -38,7 +38,11 @@ const worker = new Worker(
                 throw new Error("Simulated temporary email failure");
             }
 
-            await sendEmail(job.data.email);
+            await sendEmail(
+                job.data.email,
+                `notification-${job.data.notificationId}`
+            );
+           
 
         await db.query(
             `

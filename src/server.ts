@@ -1,9 +1,9 @@
 import express from 'express';
 import { emailQueue } from './queues/email.queue.js';
 import { db } from "./config/database.js";
-import { createNotification, claimNotification, createNotificationWithOutbox } from "./services/notifications.service.js";
+import { createNotification, claimNotification, createNotificationWithOutbox,retryFailedNotification } from "./services/notifications.service.js";
 import { getPendingOutboxEvents, claimPendingOutboxEvents, recoverStuckOutboxEvents } from "./services/outbox.service.js";
-
+import { deadLetterEmailQueue } from "./queues/dead-letter-email.queue.js";
 const app = express();
 
 const PORT = 3000;
@@ -33,6 +33,81 @@ app.get('/', async (req, res) => {
     })
 });
 
+
+app.get("/dlq", async (req, res) => {
+    try {
+        const jobs = await deadLetterEmailQueue.getJobs(
+            ["waiting", "active", "completed", "failed", "delayed"],
+            0,
+            20
+        );
+
+        res.json(
+            jobs.map((job) => ({
+                id: job.id,
+                name: job.name,
+                data: job.data,
+                attemptsMade: job.attemptsMade,
+                failedReason: job.data.failedReason
+            }))
+        );
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            message: "Failed to get DLQ jobs"
+        });
+    }
+});
+app.post("/dlq/:jobId/retry", async (req, res) => {
+    try {
+        const dlqJob = await deadLetterEmailQueue.getJob(
+            req.params.jobId
+        );
+
+        if (!dlqJob) {
+            return res.status(404).json({
+                message: "DLQ job not found"
+            });
+        }
+        const notificationReset = await retryFailedNotification(
+            dlqJob.data.notificationId
+        );
+
+        if (!notificationReset) {
+            return res.status(409).json({
+                message: "Notification cannot be replayed"
+            });
+        }
+        const newJob = await emailQueue.add(
+            dlqJob.name,
+            {
+                ...dlqJob.data,
+                shouldFail: false
+            },
+            {
+                jobId: `replay-${dlqJob.id}`,
+                attempts: 3,
+                backoff: {
+                    type: "exponential",
+                    delay: 2000
+                }
+            }
+        );
+
+        res.json({
+            message: "DLQ job replayed",
+            originalDlqJobId: dlqJob.id,
+            newJobId: newJob.id
+        });
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            message: "Failed to replay DLQ job"
+        });
+    }
+});
 app.get("/test-bulk", async (req, res) => {
     const start = Date.now();
 
@@ -71,18 +146,43 @@ app.get("/test-delayed", async (req, res) => {
     });
 });
 app.get("/test-failure-event", async (req, res) => {
-    const job = await emailQueue.add(
-        "test-failure",
-        {
-            email: "failure@gmail.com",
-            shouldFail: true
-        }
-    );
+    try {
+        const idempotencyKey = `dlq-test-${Date.now()}`;
 
-    res.json({
-        message: "Failure test job added",
-        jobId: job.id
-    });
+        const notification = await createNotification(
+            idempotencyKey,
+            "failure@gmail.com",
+            "test-failure"
+        );
+
+        const job = await emailQueue.add(
+            "test-failure",
+            {
+                notificationId: notification.id,
+                email: notification.email,
+                shouldFail: true
+            },
+            {
+                attempts: 3,
+                backoff: {
+                    type: "exponential",
+                    delay: 2000
+                }
+            }
+        );
+
+        res.json({
+            message: "DLQ test job added",
+            notificationId: notification.id,
+            jobId: job.id
+        });
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            message: "DLQ test failed"
+        });
+    }
 });
 app.get("/test-priority", async (req, res) => {
     await emailQueue.add(

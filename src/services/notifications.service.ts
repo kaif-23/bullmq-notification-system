@@ -126,3 +126,20 @@ export async function incrementNotificationAttempts(
 
     return result.rows[0]?.attempts;
 }
+export async function retryFailedNotification(
+    notificationId: number
+): Promise<boolean> {
+    const result = await db.query(
+        `
+        UPDATE notifications
+        SET status = 'pending',
+            updated_at = NOW()
+        WHERE id = $1
+          AND status = 'failed'
+        RETURNING id
+        `,
+        [notificationId]
+    );
+
+    return result.rowCount === 1;
+}
