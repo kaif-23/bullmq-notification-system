@@ -1,7 +1,11 @@
+import { PoolClient } from "pg";
 import { db } from "../config/database.js";
+import type { OutboxEvent } from "../types/notification.types.js";
 
-export async function getPendingOutboxEvents() {
-    const result = await db.query(
+// ─── Read ─────────────────────────────────────────────────────────────────────
+
+export async function getPendingOutboxEvents(): Promise<OutboxEvent[]> {
+    const result = await db.query<OutboxEvent>(
         `
         SELECT *
         FROM notification_outbox
@@ -13,9 +17,37 @@ export async function getPendingOutboxEvents() {
 
     return result.rows;
 }
+
+// ─── Write ────────────────────────────────────────────────────────────────────
+
+/**
+ * Insert a new outbox event using an existing client.
+ * Designed to be called inside a transaction that the caller manages.
+ * Returns the created outbox event row.
+ */
+export async function createOutboxEvent(
+    client: PoolClient,
+    notificationId: number,
+    eventType: string,
+    payload: Record<string, unknown>
+): Promise<OutboxEvent> {
+    const result = await client.query<OutboxEvent>(
+        `
+        INSERT INTO notification_outbox
+            (notification_id, event_type, payload)
+        VALUES
+            ($1, $2, $3)
+        RETURNING *
+        `,
+        [notificationId, eventType, JSON.stringify(payload)]
+    );
+
+    return result.rows[0];
+}
+
 export async function markOutboxPublished(
     outboxId: number
-) {
+): Promise<void> {
     await db.query(
         `
         UPDATE notification_outbox
@@ -26,13 +58,16 @@ export async function markOutboxPublished(
         [outboxId]
     );
 }
-export async function claimPendingOutboxEvents() {
+
+// ─── Claim (FOR UPDATE SKIP LOCKED) ──────────────────────────────────────────
+
+export async function claimPendingOutboxEvents(): Promise<OutboxEvent[]> {
     const client = await db.connect();
 
     try {
         await client.query("BEGIN");
 
-        const result = await client.query(
+        const result = await client.query<OutboxEvent>(
             `
             SELECT *
             FROM notification_outbox
@@ -66,8 +101,11 @@ export async function claimPendingOutboxEvents() {
         client.release();
     }
 }
-export async function recoverStuckOutboxEvents() {
-    const result = await db.query(
+
+// ─── Recovery ────────────────────────────────────────────────────────────────
+
+export async function recoverStuckOutboxEvents(): Promise<{ id: number }[]> {
+    const result = await db.query<{ id: number }>(
         `
         UPDATE notification_outbox
         SET status = 'pending'

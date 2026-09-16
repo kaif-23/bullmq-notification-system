@@ -1,0 +1,11 @@
+import { Router } from "express";
+import { asyncHandler } from "../utils/async-handler.js";
+import { getQueueStats, getQueueJobs } from "../controllers/queue.controller.js";
+
+const router = Router();
+
+// Maintaining original endpoint names for compatibility
+router.get("/queue-stats", asyncHandler(getQueueStats));
+router.get("/queue-jobs", asyncHandler(getQueueJobs));
+
+export default router;

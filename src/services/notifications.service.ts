@@ -1,11 +1,15 @@
+import { PoolClient } from "pg";
 import { db } from "../config/database.js";
+import type { Notification } from "../types/notification.types.js";
+
+// ─── Create ───────────────────────────────────────────────────────────────────
 
 export async function createNotification(
     idempotencyKey: string,
     email: string,
     type: string
-) {
-    const result = await db.query(
+): Promise<Notification> {
+    const result = await db.query<Notification>(
         `
         INSERT INTO notifications
             (idempotency_key, email, type)
@@ -18,17 +22,18 @@ export async function createNotification(
 
     return result.rows[0];
 }
+
 export async function createNotificationWithOutbox(
     idempotencyKey: string,
     email: string,
     type: string
-) {
+): Promise<{ notification: Notification; created: boolean }> {
     const client = await db.connect();
 
     try {
         await client.query("BEGIN");
 
-        const notificationResult = await client.query(
+        const notificationResult = await client.query<Notification>(
             `
             INSERT INTO notifications
                 (idempotency_key, email, type)
@@ -39,13 +44,14 @@ export async function createNotificationWithOutbox(
             `,
             [idempotencyKey, email, type]
         );
+
         if (notificationResult.rows.length === 0) {
-            const existingResult = await client.query(
+            const existingResult = await client.query<Notification>(
                 `
-        SELECT *
-        FROM notifications
-        WHERE idempotency_key = $1
-        `,
+                SELECT *
+                FROM notifications
+                WHERE idempotency_key = $1
+                `,
                 [idempotencyKey]
             );
 
@@ -56,7 +62,9 @@ export async function createNotificationWithOutbox(
                 created: false
             };
         }
+
         const notification = notificationResult.rows[0];
+
         await client.query(
             `
             INSERT INTO notification_outbox
@@ -89,6 +97,32 @@ export async function createNotificationWithOutbox(
         client.release();
     }
 }
+
+// ─── Read ─────────────────────────────────────────────────────────────────────
+
+export async function getNotificationById(
+    notificationId: number
+): Promise<Notification | null> {
+    const result = await db.query<Notification>(
+        `
+        SELECT *
+        FROM notifications
+        WHERE id = $1
+        `,
+        [notificationId]
+    );
+
+    return result.rows[0] ?? null;
+}
+
+// ─── State transitions ────────────────────────────────────────────────────────
+
+/**
+ * Claim a notification for processing.
+ * - First attempt: requires status = 'pending'
+ * - Retry (attemptsMade > 0): also allows status = 'processing'
+ *   (the previous attempt left it in processing after throwing)
+ */
 export async function claimNotification(
     notificationId: number,
     isRetry: boolean
@@ -110,10 +144,11 @@ export async function claimNotification(
 
     return result.rowCount === 1;
 }
+
 export async function incrementNotificationAttempts(
     notificationId: number
-) {
-    const result = await db.query(
+): Promise<number> {
+    const result = await db.query<{ attempts: number }>(
         `
         UPDATE notifications
         SET attempts = attempts + 1,
@@ -124,12 +159,48 @@ export async function incrementNotificationAttempts(
         [notificationId]
     );
 
-    return result.rows[0]?.attempts;
+    return result.rows[0]?.attempts ?? 0;
 }
-export async function retryFailedNotification(
+
+export async function markNotificationSent(
+    notificationId: number
+): Promise<void> {
+    await db.query(
+        `
+        UPDATE notifications
+        SET status = 'sent',
+            updated_at = NOW()
+        WHERE id = $1
+        `,
+        [notificationId]
+    );
+}
+
+export async function markNotificationFailed(
+    notificationId: number
+): Promise<void> {
+    await db.query(
+        `
+        UPDATE notifications
+        SET status = 'failed',
+            updated_at = NOW()
+        WHERE id = $1
+        `,
+        [notificationId]
+    );
+}
+
+/**
+ * Atomically transition a notification from 'failed' → 'pending' for replay.
+ * Must be called inside an existing transaction (caller provides client).
+ * Returns true if the row was updated (i.e. it was in 'failed' state).
+ * Returns false if the notification was not in 'failed' state (concurrent replay guard).
+ */
+export async function resetNotificationForReplay(
+    client: PoolClient,
     notificationId: number
 ): Promise<boolean> {
-    const result = await db.query(
+    const result = await client.query(
         `
         UPDATE notifications
         SET status = 'pending',

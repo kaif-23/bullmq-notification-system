@@ -1,5 +1,5 @@
 import { emailQueue } from "../queues/email.queue.js";
-import { claimPendingOutboxEvents, getPendingOutboxEvents,markOutboxPublished, recoverStuckOutboxEvents } from "../services/outbox.service.js";
+import { claimPendingOutboxEvents, getPendingOutboxEvents, markOutboxPublished, recoverStuckOutboxEvents } from "../services/outbox.service.js";
 
 async function publishOutboxEvents() {
     const events = await getPendingOutboxEvents();
