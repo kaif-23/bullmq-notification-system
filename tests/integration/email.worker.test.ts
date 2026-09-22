@@ -4,10 +4,12 @@ import app from "../../src/app.js";
 import { db } from "../../src/config/database.js";
 import { redisClient } from "../../src/config/redis-client.js";
 import { emailQueue } from "../../src/queues/email.queue.js";
-import { sendEmail } from "../../src/services/email.service.js";
+import { EmailProviderError } from "../../src/errors/email-provider.error.js";
+import { SimulatedEmailProvider } from "../../src/providers/simulated-email.provider.js";
 import { createEmailWorker } from "../../src/workers/email.worker.js";
-import type { SendEmailImplementation } from "../../src/workers/email.processor.js";
+import type { EmailProvider } from "../../src/types/email-provider.types.js";
 import type { EmailJobData } from "../../src/types/email.types.js";
+import { FakeEmailProvider } from "../fakes/fake-email.provider.js";
 import type { Worker } from "bullmq";
 
 const workers: Worker[] = [];
@@ -40,8 +42,8 @@ async function createNotification(orderId = "worker-order") {
     return { notificationId, data: outboxResult.rows[0].payload };
 }
 
-async function createWorker(sendEmailImplementation?: SendEmailImplementation) {
-    const worker = createEmailWorker(sendEmailImplementation);
+async function createWorker(provider?: EmailProvider) {
+    const worker = createEmailWorker(provider);
     workers.push(worker);
     await worker.waitUntilReady();
     return worker;
@@ -87,7 +89,8 @@ describe("email worker and BullMQ retries", () => {
 
     it("claims a pending notification, increments attempts, and marks it sent", async () => {
         const { notificationId, data } = await createNotification();
-        const worker = await createWorker();
+        const provider = new FakeEmailProvider();
+        const worker = await createWorker(provider);
         const job = await emailQueue.add("account-verification", data, {
             jobId: `worker-success-${notificationId}`,
             attempts: 1
@@ -99,6 +102,7 @@ describe("email worker and BullMQ retries", () => {
             status: "sent",
             attempts: 1
         });
+        expect(provider.calls).toBe(1);
         await worker.close();
         workers.splice(workers.indexOf(worker), 1);
     });
@@ -128,10 +132,13 @@ describe("email worker and BullMQ retries", () => {
 
     it("propagates provider failure and leaves the notification processing", async () => {
         const { notificationId, data } = await createNotification("provider-failure");
-        const alwaysFail: SendEmailImplementation = async () => {
-            throw new Error("deterministic provider failure");
-        };
-        await createWorker(alwaysFail);
+        const providerError = new EmailProviderError({
+            code: "EMAIL_PROVIDER_UNAVAILABLE",
+            message: "deterministic provider failure",
+            retryable: true
+        });
+        const provider = new FakeEmailProvider(providerError);
+        await createWorker(provider);
         const job = await emailQueue.add("account-verification", data, {
             jobId: `worker-failure-${notificationId}`,
             attempts: 1
@@ -144,19 +151,39 @@ describe("email worker and BullMQ retries", () => {
             attempts: 1
         });
         expect((await emailQueue.getJob(job.id!))?.attemptsMade).toBe(1);
+        expect((await emailQueue.getJob(job.id!))?.failedReason).toBe(
+            "deterministic provider failure"
+        );
+    });
+
+    it("preserves generic provider error fields", () => {
+        const cause = new Error("upstream failure");
+        const error = new EmailProviderError({
+            code: "EMAIL_PROVIDER_UNAVAILABLE",
+            message: "Email provider is unavailable",
+            retryable: true,
+            cause
+        });
+
+        expect(error).toBeInstanceOf(Error);
+        expect(error.name).toBe("EmailProviderError");
+        expect(error.code).toBe("EMAIL_PROVIDER_UNAVAILABLE");
+        expect(error.message).toBe("Email provider is unavailable");
+        expect(error.retryable).toBe(true);
+        expect(error.cause).toBe(cause);
     });
 
     it("uses real BullMQ retry and reclaims processing on the second attempt", async () => {
         const { notificationId, data } = await createNotification("retry-success");
-        let calls = 0;
-        const failOnceThenSend: SendEmailImplementation = async (email, key) => {
-            calls += 1;
-            if (calls === 1) {
-                throw new Error("first attempt fails");
-            }
-            return sendEmail(email, key);
-        };
-        const worker = await createWorker(failOnceThenSend);
+        const provider = new FakeEmailProvider([
+            new EmailProviderError({
+                code: "EMAIL_PROVIDER_TEMPORARY_FAILURE",
+                message: "first attempt fails",
+                retryable: true
+            }),
+            { status: "sent" }
+        ]);
+        const worker = await createWorker(provider);
         const firstFailure = new Promise<void>((resolve) => {
             worker.once("failed", () => resolve());
         });
@@ -173,7 +200,7 @@ describe("email worker and BullMQ retries", () => {
         expect((await getNotification(notificationId)).status).toBe("processing");
         await waitForJobState(job.id!, "completed");
 
-        expect(calls).toBe(2);
+        expect(provider.calls).toBe(2);
         expect(await getNotification(notificationId)).toEqual({
             status: "sent",
             attempts: 2
@@ -216,7 +243,8 @@ describe("email worker and BullMQ retries", () => {
     it("treats provider already_sent as successful and marks the notification sent", async () => {
         const { notificationId, data } = await createNotification("already-sent");
         const providerKey = `notification-${notificationId}`;
-        expect(await sendEmail(data.email, providerKey)).toEqual({ status: "sent" });
+        const provider = new SimulatedEmailProvider();
+        expect(await provider.send({ to: data.email, idempotencyKey: providerKey })).toEqual({ status: "sent" });
         await createWorker();
         const job = await emailQueue.add("account-verification", data, {
             jobId: `worker-already-sent-${notificationId}`,

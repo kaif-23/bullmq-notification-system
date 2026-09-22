@@ -4,6 +4,7 @@ import { emailQueue } from "../queues/email.queue.js";
 import { deadLetterEmailQueue } from "../queues/dead-letter-email.queue.js";
 import { markNotificationFailed } from "../services/notifications.service.js";
 import type { EmailJobData } from "../types/email.types.js";
+import { logError, logInfo, logWarn } from "../utils/logger.js";
 
 export const RECONCILIATION_INTERVAL_MS = 30_000;
 
@@ -14,30 +15,36 @@ export async function ensureDlqEntry(
     const jobId = job.id;
 
     if (!jobId) {
-        console.warn("[DLQ] Failed job has no ID — skipping");
+        logWarn("dlq_failed_job_missing_id");
         return;
     }
 
     const maxAttempts = job.opts.attempts ?? 1;
     const attemptsMade = job.attemptsMade;
 
-    if (attemptsMade < maxAttempts) return;
+    if (attemptsMade < maxAttempts && !job.data.permanentFailure) return;
 
-    console.log(
-        `[DLQ] Permanent failure detected for job ${jobId} | notificationId: ${job.data.notificationId}`
-    );
+    logInfo("dlq_permanent_failure_detected", {
+        jobId,
+        notificationId: job.data.notificationId,
+        outboxEventId: null,
+        attemptsMade,
+        failureCode: job.data.failureCode ?? null
+    });
 
     if (job.data.notificationId != null) {
         try {
             await markNotificationFailed(job.data.notificationId);
-            console.log(
-                `[DLQ] Notification ${job.data.notificationId} marked as failed`
-            );
+            logInfo("notification_marked_failed", {
+                jobId,
+                notificationId: job.data.notificationId
+            });
         } catch (error) {
-            console.error(
-                `[DLQ] Failed to mark notification ${job.data.notificationId} as failed`,
-                error
-            );
+            logError("notification_mark_failed_error", {
+                jobId,
+                notificationId: job.data.notificationId,
+                errorMessage: error instanceof Error ? error.message : String(error)
+            });
         }
     }
 
@@ -63,14 +70,13 @@ export async function ensureDlqEntry(
             message.includes("already exists") ||
             message.includes("Job already exists")
         ) {
-            console.log(
-                `[DLQ] Duplicate DLQ entry detected — ${dlqJobId} already exists, skipping`
-            );
+            logInfo("dlq_entry_duplicate", { jobId, dlqJobId });
         } else {
-            console.error(
-                `[DLQ] Unexpected error inserting DLQ entry ${dlqJobId}`,
-                error
-            );
+            logError("dlq_entry_create_failed", {
+                jobId,
+                dlqJobId,
+                errorMessage: message
+            });
         }
     }
 }
@@ -82,15 +88,18 @@ export async function processFailedJob(
     const job = await Job.fromId<EmailJobData>(emailQueue, jobId);
 
     if (!job) {
-        console.warn(`[DLQ] Job ${jobId} not found — skipping failure handler`);
+        logWarn("dlq_failed_job_not_found", { jobId });
         return;
     }
 
     const maxAttempts = job.opts.attempts ?? 1;
-    if (job.attemptsMade < maxAttempts) {
-        console.log(
-            `[EVENT] Job ${jobId} has ${maxAttempts - job.attemptsMade} attempts remaining — will retry`
-        );
+    if (job.attemptsMade < maxAttempts && !job.data.permanentFailure) {
+        logInfo("email_job_retry_pending", {
+            jobId,
+            notificationId: job.data.notificationId,
+            attemptsMade: job.attemptsMade,
+            remainingAttempts: maxAttempts - job.attemptsMade
+        });
         return;
     }
 
@@ -102,7 +111,7 @@ export async function reconcileExhaustedJobs(): Promise<void> {
 
     for (const job of jobs) {
         const maxAttempts = job.opts.attempts ?? 1;
-        if (job.attemptsMade >= maxAttempts && job.id) {
+        if ((job.attemptsMade >= maxAttempts || job.data.permanentFailure) && job.id) {
             await processFailedJob(job.id, job.failedReason ?? "Unknown failure");
         }
     }
@@ -114,12 +123,15 @@ export function createEmailQueueEvents(): QueueEvents {
     });
 
     queueEvents.on("completed", ({ jobId }) => {
-        console.log(`[EVENT] Job ${jobId} completed successfully`);
+        logInfo("email_job_event_completed", { jobId });
     });
 
     queueEvents.on("failed", ({ jobId, failedReason }) => {
         void processFailedJob(jobId, failedReason).catch((error) => {
-            console.error(`[EVENT] Failure handler crashed for job ${jobId}`, error);
+            logError("email_job_failure_handler_crashed", {
+                jobId,
+                errorMessage: error instanceof Error ? error.message : String(error)
+            });
         });
     });
 

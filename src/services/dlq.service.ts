@@ -7,6 +7,7 @@ import {
 import { createOutboxEvent } from "./outbox.service.js";
 import type { EmailJobData } from "../types/email.types.js";
 import type { ReplayResult, ReplayError } from "../types/dlq.types.js";
+import { logError, logInfo, logWarn } from "../utils/logger.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -43,7 +44,7 @@ export async function replayDlqJob(
     const dlqJob = await deadLetterEmailQueue.getJob(dlqJobId);
 
     if (!dlqJob) {
-        console.warn(`[DLQ-REPLAY] Job ${dlqJobId} not found`);
+        logWarn("dlq_replay_job_not_found", { dlqJobId });
         return { code: "DLQ_JOB_NOT_FOUND" };
     }
 
@@ -52,9 +53,7 @@ export async function replayDlqJob(
     // ── Step 2: Validate job data ─────────────────────────────────────────────
 
     if (jobData.notificationId == null) {
-        console.warn(
-            `[DLQ-REPLAY] Job ${dlqJobId} has no notificationId — cannot replay`
-        );
+        logWarn("dlq_replay_missing_notification_id", { dlqJobId });
         return { code: "MISSING_NOTIFICATION_ID" };
     }
 
@@ -65,9 +64,12 @@ export async function replayDlqJob(
     const currentReplayCount = jobData.replayCount ?? 0;
 
     if (currentReplayCount >= MAX_REPLAYS) {
-        console.warn(
-            `[DLQ-REPLAY] Rejected — notificationId ${notificationId} has been replayed ${currentReplayCount} times (max: ${MAX_REPLAYS})`
-        );
+        logWarn("dlq_replay_limit_reached", {
+            dlqJobId,
+            notificationId,
+            replayCount: currentReplayCount,
+            maxReplays: MAX_REPLAYS
+        });
         return {
             code: "MAX_REPLAYS_EXCEEDED",
             replayCount: currentReplayCount,
@@ -80,23 +82,21 @@ export async function replayDlqJob(
     const notification = await getNotificationById(notificationId);
 
     if (!notification) {
-        console.warn(
-            `[DLQ-REPLAY] Notification ${notificationId} not found in database`
-        );
+        logWarn("dlq_replay_notification_not_found", { dlqJobId, notificationId });
         return { code: "NOTIFICATION_NOT_FOUND", notificationId };
     }
 
     if (notification.status === "sent") {
-        console.warn(
-            `[DLQ-REPLAY] Notification ${notificationId} is already sent — replay rejected`
-        );
+        logWarn("dlq_replay_notification_already_sent", { dlqJobId, notificationId });
         return { code: "NOTIFICATION_ALREADY_SENT", notificationId };
     }
 
     if (notification.status !== "failed") {
-        console.warn(
-            `[DLQ-REPLAY] Notification ${notificationId} is in status '${notification.status}' — can only replay 'failed' notifications`
-        );
+        logWarn("dlq_replay_notification_not_replayable", {
+            dlqJobId,
+            notificationId,
+            status: notification.status
+        });
         return {
             code: "NOTIFICATION_NOT_REPLAYABLE",
             status: notification.status,
@@ -123,9 +123,7 @@ export async function replayDlqJob(
 
         if (!reset) {
             await client.query("ROLLBACK");
-            console.warn(
-                `[DLQ-REPLAY] Concurrent replay detected — notification ${notificationId} was already reset`
-            );
+            logWarn("dlq_replay_concurrent", { dlqJobId, notificationId });
             return { code: "CONCURRENT_REPLAY", notificationId };
         }
 
@@ -153,15 +151,19 @@ export async function replayDlqJob(
 
         await client.query("COMMIT");
 
-        console.log(
-            `[DLQ-REPLAY] Replay queued — notificationId: ${notificationId} | outboxEventId: ${outboxEventId} | replayCount: ${nextReplayCount}`
-        );
+        logInfo("dlq_replay_queued", {
+            dlqJobId,
+            notificationId,
+            outboxEventId,
+            replayCount: nextReplayCount
+        });
     } catch (error) {
         await client.query("ROLLBACK");
-        console.error(
-            `[DLQ-REPLAY] Transaction failed for notificationId ${notificationId}`,
-            error
-        );
+        logError("dlq_replay_transaction_failed", {
+            dlqJobId,
+            notificationId,
+            errorMessage: error instanceof Error ? error.message : String(error)
+        });
         return { code: "INTERNAL_ERROR", error };
     } finally {
         client.release();
@@ -177,14 +179,13 @@ export async function replayDlqJob(
     // notification status is now 'pending', not 'failed' — safe.
     try {
         await dlqJob.remove();
-        console.log(
-            `[DLQ-REPLAY] Removed original DLQ job ${dlqJobId}`
-        );
+        logInfo("dlq_replay_source_removed", { dlqJobId, notificationId });
     } catch (error) {
-        console.warn(
-            `[DLQ-REPLAY] Could not remove DLQ job ${dlqJobId} — it will remain but cannot be replayed again`,
-            error
-        );
+        logWarn("dlq_replay_source_remove_failed", {
+            dlqJobId,
+            notificationId,
+            errorMessage: error instanceof Error ? error.message : String(error)
+        });
     }
 
     return {

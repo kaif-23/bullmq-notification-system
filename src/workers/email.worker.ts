@@ -1,14 +1,15 @@
 import { Worker } from "bullmq";
 import { redisConnection } from "../config/redis.js";
-import { sendEmail } from "../services/email.service.js";
-import { processEmailJob, type SendEmailImplementation } from "./email.processor.js";
+import { emailProvider } from "../providers/simulated-email.provider.js";
+import type { EmailProvider } from "../types/email-provider.types.js";
+import { processEmailJob } from "./email.processor.js";
 
 export function createEmailWorker(
-    sendEmailImplementation: SendEmailImplementation = sendEmail
+    provider: EmailProvider = emailProvider
 ): Worker {
     return new Worker(
         "email",
-        (job) => processEmailJob(job, sendEmailImplementation),
+        (job) => processEmailJob(job, provider),
         {
             connection: redisConnection,
             concurrency: 2,

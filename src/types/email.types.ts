@@ -12,4 +12,8 @@ export interface EmailJobData {
     failedReason?: string;
     /** Present on DLQ jobs — how many BullMQ attempts were made */
     attemptsMade?: number;
+    /** Set when a provider error is permanently unrecoverable */
+    permanentFailure?: boolean;
+    /** Generic application-level provider error code */
+    failureCode?: string;
 }

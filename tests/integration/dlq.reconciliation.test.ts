@@ -3,16 +3,17 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Job, QueueEvents, Worker } from "bullmq";
 import app from "../../src/app.js";
 import { db } from "../../src/config/database.js";
+import { EmailProviderError } from "../../src/errors/email-provider.error.js";
 import { createEmailQueueEvents, reconcileExhaustedJobs } from "../../src/events/email.events.js";
 import { deadLetterEmailQueue } from "../../src/queues/dead-letter-email.queue.js";
 import { emailQueue } from "../../src/queues/email.queue.js";
-import { sendEmail } from "../../src/services/email.service.js";
 import { claimNotification } from "../../src/services/notifications.service.js";
 import { replayDlqJob, MAX_REPLAYS } from "../../src/services/dlq.service.js";
 import { runRelayOnce } from "../../src/workers/outbox.relay.js";
 import { createEmailWorker } from "../../src/workers/email.worker.js";
-import type { SendEmailImplementation } from "../../src/workers/email.processor.js";
 import type { EmailJobData } from "../../src/types/email.types.js";
+import { FakeEmailProvider } from "../fakes/fake-email.provider.js";
+import { SimulatedEmailProvider } from "../../src/providers/simulated-email.provider.js";
 
 const internalApiKey = "phase-4-test-internal-key";
 const workers: Worker[] = [];
@@ -65,7 +66,11 @@ async function createNotification(orderId: string) {
     return { notificationId, data: outboxResult.rows[0].payload };
 }
 
-async function createFailedNotification(orderId: string, useEvents = true) {
+async function createFailedNotification(
+    orderId: string,
+    useEvents = true,
+    attempts = 1
+) {
     const created = await createNotification(orderId);
     await db.query(
         `UPDATE notification_outbox
@@ -74,10 +79,12 @@ async function createFailedNotification(orderId: string, useEvents = true) {
         [created.notificationId]
     );
 
-    const alwaysFail: SendEmailImplementation = async () => {
-        throw new Error("permanent provider failure");
-    };
-    const worker = createEmailWorker(alwaysFail);
+    const provider = new FakeEmailProvider(new EmailProviderError({
+        code: "EMAIL_PROVIDER_INVALID_REQUEST",
+        message: "permanent provider failure",
+        retryable: false
+    }));
+    const worker = createEmailWorker(provider);
     workers.push(worker);
     await worker.waitUntilReady();
 
@@ -90,7 +97,7 @@ async function createFailedNotification(orderId: string, useEvents = true) {
 
     const originalJob = await emailQueue.add("account-verification", created.data, {
         jobId: `dlq-source-${created.notificationId}`,
-        attempts: 1,
+        attempts,
         removeOnFail: { age: 3600, count: 100 }
     });
 
@@ -168,12 +175,28 @@ describe("DLQ, reconciliation, and replay", () => {
             notificationId: failed.notificationId,
             attemptsMade: 1,
             replayCount: 0,
+            failureCode: "EMAIL_PROVIDER_INVALID_REQUEST",
             failedReason: "permanent provider failure"
         });
         expect(
             (await deadLetterEmailQueue.getJobs(["waiting", "active", "completed", "failed", "delayed"]))
                 .filter((job) => job.id === failed.dlqJobId)
         ).toHaveLength(1);
+    });
+
+    it("fails a permanent provider error without consuming remaining BullMQ retries", async () => {
+        const failed = await createFailedNotification("permanent-before-exhaustion", true, 3);
+        const originalJob = await emailQueue.getJob(failed.originalJobId);
+        const dlqJob = await deadLetterEmailQueue.getJob(failed.dlqJobId);
+
+        expect(await originalJob?.getState()).toBe("failed");
+        expect(originalJob?.attemptsMade).toBe(1);
+        expect(originalJob?.opts.attempts).toBe(3);
+        expect(dlqJob?.data.failureCode).toBe("EMAIL_PROVIDER_INVALID_REQUEST");
+        expect(await getNotification(failed.notificationId)).toEqual({
+            status: "failed",
+            attempts: 1
+        });
     });
 
     it("prevents duplicate DLQ entries when permanent handling runs twice", async () => {
@@ -281,7 +304,7 @@ describe("DLQ, reconciliation, and replay", () => {
         const replayJobId = `outbox-${replayEvent.rows[0].id}`;
         expect(await emailQueue.getJob(replayJobId)).toBeDefined();
 
-        const worker = createEmailWorker();
+        const worker = createEmailWorker(new SimulatedEmailProvider());
         workers.push(worker);
         await worker.waitUntilReady();
         await waitFor(

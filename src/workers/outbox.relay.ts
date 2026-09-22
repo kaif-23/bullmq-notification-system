@@ -1,6 +1,7 @@
 import { emailQueue } from "../queues/email.queue.js";
 import { claimPendingOutboxEvents, markOutboxPublished, recoverStuckOutboxEvents } from "../services/outbox.service.js";
 import { db } from "../config/database.js";
+import { logError, logInfo } from "../utils/logger.js";
 
 let running = true;
 let timer: NodeJS.Timeout | undefined;
@@ -35,20 +36,25 @@ export async function runRelayOnce(): Promise<void> {
 
                 await markOutboxPublished(event.id);
 
-                console.log(
-                    `[OUTBOX] Published event ${event.id}`
-                );
+                logInfo("outbox_event_published", {
+                    outboxEventId: event.id,
+                    notificationId: event.notification_id,
+                    jobId: `outbox-${event.id}`
+                });
             } catch (error) {
-                console.error(
-                    `[OUTBOX] Failed to publish event ${event.id}`,
-                    error
-                );
+                logError("outbox_event_publish_failed", {
+                    outboxEventId: event.id,
+                    notificationId: event.notification_id,
+                    errorMessage: error instanceof Error ? error.message : String(error)
+                });
             }
         }
 
         await recoverStuckOutboxEvents();
     } catch (error) {
-        console.error("[OUTBOX] Relay cycle failed", error);
+        logError("outbox_relay_cycle_failed", {
+            errorMessage: error instanceof Error ? error.message : String(error)
+        });
     }
 }
 

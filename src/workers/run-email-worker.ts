@@ -1,8 +1,9 @@
 import { redisClient } from "../config/redis-client.js";
 import { db } from "../config/database.js";
+import { ResendEmailProvider } from "../providers/resend-email.provider.js";
 import { createEmailWorker } from "./email.worker.js";
 
-const worker = createEmailWorker();
+const worker = createEmailWorker(new ResendEmailProvider());
 
 console.log("[WORKER] Email worker started");
 
