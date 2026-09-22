@@ -7,8 +7,12 @@
     "worker": "tsx watch src/workers/email.worker.ts",
     "events": "tsx watch src/events/email.events.ts",
     "relay": "tsx watch src/workers/outbox.relay.ts",
+    "migrate": "tsx src/db/run-migrations.ts",
     "start": "tsx dist/server.js",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run tests/integration"
   },
   "keywords": [],
   "author": "",
@@ -26,6 +30,7 @@
     "@types/node": "^22.20.2",
     "@types/pg": "^8.23.1",
     "tsx": "^4.23.13",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
   }
 }

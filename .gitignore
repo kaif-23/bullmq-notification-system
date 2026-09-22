@@ -24,3 +24,4 @@ coverage/
 Thumbs.db
 
 docs/
+!.env.test.example
