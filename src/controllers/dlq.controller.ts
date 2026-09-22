@@ -9,19 +9,19 @@ export const listDlqJobs = async (req: Request, res: Response) => {
         20
     );
 
-    res.json(
-        jobs.map((job) => ({
-            id: job.id,
-            name: job.name,
-            notificationId: job.data.notificationId,
-            email: job.data.email,
-            originalJobId: job.data.originalJobId,
-            failedReason: job.data.failedReason,
-            attemptsMade: job.data.attemptsMade,
-            replayCount: job.data.replayCount ?? 0,
-            maxReplays: MAX_REPLAYS
-        }))
-    );
+    res.json(await Promise.all(jobs.map(async (job) => ({
+        id: job.id,
+        name: job.name,
+        notificationId: job.data.notificationId,
+        originalJobId: job.data.originalJobId,
+        failedReason: job.data.failedReason,
+        attemptsMade: job.data.attemptsMade,
+        replayCount: job.data.replayCount ?? 0,
+        maxReplays: MAX_REPLAYS,
+        status: await job.getState(),
+        timestamp: job.timestamp,
+        finishedOn: job.finishedOn
+    }))));
 };
 
 export const getDlqJob = async (req: Request, res: Response) => {
@@ -36,13 +36,15 @@ export const getDlqJob = async (req: Request, res: Response) => {
         id: job.id,
         name: job.name,
         notificationId: job.data.notificationId,
-        email: job.data.email,
         originalJobId: job.data.originalJobId,
         failedReason: job.data.failedReason,
         attemptsMade: job.data.attemptsMade,
         replayCount: job.data.replayCount ?? 0,
         maxReplays: MAX_REPLAYS,
-        canReplay: (job.data.replayCount ?? 0) < MAX_REPLAYS
+        canReplay: (job.data.replayCount ?? 0) < MAX_REPLAYS,
+        status: await job.getState(),
+        timestamp: job.timestamp,
+        finishedOn: job.finishedOn
     });
 };
 

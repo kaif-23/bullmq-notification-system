@@ -2,6 +2,7 @@ export interface EmailJobData {
     notificationId: number;
     email: string;
     type?: string;
+    data?: Record<string, unknown>;
     requestId?: string;
     /** Present on DLQ jobs — tracks how many times this notification was replayed */
     replayCount?: number;

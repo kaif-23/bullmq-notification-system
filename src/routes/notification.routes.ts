@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { asyncHandler } from "../utils/async-handler.js";
 import {
-	createEmailNotification,
-	getNotificationStatus
+    createEmailNotification,
+    getNotificationStatus
 } from "../controllers/notification.controller.js";
 
 const router = Router();

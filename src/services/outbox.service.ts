@@ -37,7 +37,8 @@ export async function markOutboxPublished(
         UPDATE notification_outbox
         SET status = 'published',
             published_at = NOW()
-        WHERE id = $1
+                WHERE id = $1
+                    AND status = 'publishing'
         `,
         [outboxId]
     );
@@ -68,7 +69,8 @@ export async function claimPendingOutboxEvents(): Promise<OutboxEvent[]> {
             await client.query(
                 `
                 UPDATE notification_outbox
-                SET status = 'publishing'
+                SET status = 'publishing',
+                    claimed_at = NOW()
                 WHERE id = ANY($1::int[])
                 `,
                 [ids]
@@ -92,9 +94,10 @@ export async function recoverStuckOutboxEvents(): Promise<{ id: number }[]> {
     const result = await db.query<{ id: number }>(
         `
         UPDATE notification_outbox
-        SET status = 'pending'
+                SET status = 'pending',
+                        claimed_at = NULL
         WHERE status = 'publishing'
-          AND created_at < NOW() - INTERVAL '5 minutes'
+                    AND claimed_at < NOW() - INTERVAL '5 minutes'
         RETURNING id
         `
     );

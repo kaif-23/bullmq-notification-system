@@ -20,14 +20,16 @@ export const getQueueJobs = async (req: Request, res: Response) => {
         9
     );
 
-    res.json(
-        jobs.map((job) => ({
-            id: job.id,
-            name: job.name,
-            data: job.data,
-            attemptsMade: job.attemptsMade,
-            failedReason: job.failedReason,
-            timestamp: job.timestamp
-        }))
-    );
+    res.json(await Promise.all(jobs.map(async (job) => ({
+        id: job.id,
+        name: job.name,
+        notificationId: job.data.notificationId,
+        type: job.data.type,
+        status: await job.getState(),
+        attemptsMade: job.attemptsMade,
+        failedReason: job.failedReason,
+        timestamp: job.timestamp,
+        processedOn: job.processedOn,
+        finishedOn: job.finishedOn
+    }))));
 };

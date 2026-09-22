@@ -55,9 +55,7 @@ export async function sendEmail(
     idempotencyKey: string,
     timeoutMs = 3000
 ): Promise<SendEmailResult> {
-    console.log(
-        `[PROVIDER] Attempting send to ${email} | key: ${idempotencyKey}`
-    );
+    console.log(`[PROVIDER] Attempting send | key: ${idempotencyKey}`);
 
     const key = `email:idempotency:${idempotencyKey}`;
     const now = Date.now().toString();
@@ -135,7 +133,7 @@ export async function sendEmail(
     // In production this is handled by the provider's own idempotency key.
     await redisClient.set(key, "sent", "EX", 3600);
 
-    console.log(`[PROVIDER] Email sent successfully to ${email}`);
+    console.log("[PROVIDER] Email sent successfully");
 
     return { status: "sent" };
 }

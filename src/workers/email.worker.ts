@@ -7,6 +7,8 @@ import {
 } from "../services/notifications.service.js";
 import { sendEmail } from "../services/email.service.js";
 import type { EmailJobData } from "../types/email.types.js";
+import { redisClient } from "../config/redis-client.js";
+import { db } from "../config/database.js";
 
 // ─── Worker ──────────────────────────────────────────────────────────────────
 
@@ -135,6 +137,8 @@ console.log("[WORKER] Email worker started");
 async function shutdown(signal: string) {
     console.log(`[WORKER] Received ${signal} — shutting down gracefully...`);
     await worker.close();
+    await redisClient.quit();
+    await db.end();
     console.log("[WORKER] Worker shut down cleanly");
     process.exit(0);
 }

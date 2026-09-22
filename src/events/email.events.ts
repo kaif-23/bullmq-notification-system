@@ -4,6 +4,9 @@ import { emailQueue } from "../queues/email.queue.js";
 import { deadLetterEmailQueue } from "../queues/dead-letter-email.queue.js";
 import { markNotificationFailed } from "../services/notifications.service.js";
 import type { EmailJobData } from "../types/email.types.js";
+import { db } from "../config/database.js";
+
+const RECONCILIATION_INTERVAL_MS = 30_000;
 
 // ─── Event listener ───────────────────────────────────────────────────────────
 
@@ -15,30 +18,21 @@ emailQueueEvents.on("completed", ({ jobId }) => {
     console.log(`[EVENT] Job ${jobId} completed successfully`);
 });
 
-emailQueueEvents.on("failed", async ({ jobId, failedReason }) => {
-    const job = await Job.fromId<EmailJobData>(emailQueue, jobId);
+async function ensureDlqEntry(
+    job: Job<EmailJobData>,
+    failedReason: string
+): Promise<void> {
+    const jobId = job.id;
 
-    if (!job) {
-        console.warn(`[EVENT] Job ${jobId} not found — skipping failure handler`);
+    if (!jobId) {
+        console.warn("[DLQ] Failed job has no ID — skipping");
         return;
     }
 
     const maxAttempts = job.opts.attempts ?? 1;
-    const { attemptsMade } = job;
+    const attemptsMade = job.attemptsMade;
 
-    console.log(
-        `[EVENT] Job ${jobId} failed | attempt ${attemptsMade}/${maxAttempts} | reason: ${failedReason}`
-    );
-
-    // Only act on permanent failure (all attempts exhausted)
-    if (attemptsMade < maxAttempts) {
-        console.log(
-            `[EVENT] Job ${jobId} has ${maxAttempts - attemptsMade} attempts remaining — will retry`
-        );
-        return;
-    }
-
-    // ── Permanent failure ─────────────────────────────────────────────────────
+    if (attemptsMade < maxAttempts) return;
 
     console.log(
         `[DLQ] Permanent failure detected for job ${jobId} | notificationId: ${job.data.notificationId}`
@@ -82,7 +76,7 @@ emailQueueEvents.on("failed", async ({ jobId, failedReason }) => {
                 ...job.data,
                 originalJobId: job.id,
                 failedReason,
-                attemptsMade: job.attemptsMade,
+                attemptsMade,
                 replayCount: currentReplayCount
             } satisfies EmailJobData,
             {
@@ -115,6 +109,66 @@ emailQueueEvents.on("failed", async ({ jobId, failedReason }) => {
             );
         }
     }
+}
+
+async function processFailedJob(jobId: string, failedReason: string): Promise<void> {
+    const job = await Job.fromId<EmailJobData>(emailQueue, jobId);
+
+    if (!job) {
+        console.warn(`[DLQ] Job ${jobId} not found — skipping failure handler`);
+        return;
+    }
+
+    const maxAttempts = job.opts.attempts ?? 1;
+    if (job.attemptsMade < maxAttempts) {
+        console.log(
+            `[EVENT] Job ${jobId} has ${maxAttempts - job.attemptsMade} attempts remaining — will retry`
+        );
+        return;
+    }
+
+    await ensureDlqEntry(job, failedReason);
+}
+
+emailQueueEvents.on("failed", ({ jobId, failedReason }) => {
+    void processFailedJob(jobId, failedReason).catch((error) => {
+        console.error(`[EVENT] Failure handler crashed for job ${jobId}`, error);
+    });
 });
 
+async function reconcileExhaustedJobs(): Promise<void> {
+    const jobs = await emailQueue.getJobs(["failed"], 0, 100);
+
+    for (const job of jobs) {
+        const maxAttempts = job.opts.attempts ?? 1;
+        if (job.attemptsMade >= maxAttempts && job.id) {
+            await processFailedJob(job.id, job.failedReason ?? "Unknown failure");
+        }
+    }
+}
+
+const reconciliationTimer = setInterval(() => {
+    void reconcileExhaustedJobs().catch((error) => {
+        console.error("[DLQ] Reconciliation failed", error);
+    });
+}, RECONCILIATION_INTERVAL_MS);
+
 console.log("[EVENT] Email queue event listener started");
+
+let shuttingDown = false;
+
+async function shutdown(signal: string) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    clearInterval(reconciliationTimer);
+    console.log(`[EVENT] Received ${signal} — shutting down gracefully...`);
+    await emailQueueEvents.close();
+    await emailQueue.close();
+    await deadLetterEmailQueue.close();
+    await db.end();
+    console.log("[EVENT] Event listener shut down cleanly");
+    process.exit(0);
+}
+
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));

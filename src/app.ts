@@ -9,12 +9,13 @@ import { notFoundMiddleware } from "./middleware/not-found.middleware.js";
 
 const app = express();
 
-app.use(express.json());
+app.use(express.json({ limit: "32kb" }));
 app.use(requestIdMiddleware);
 
 // Register routes
 app.use("/api/v1", notificationRoutes);
-app.use("/internal", internalAuthMiddleware, queueRoutes);
+app.use("/internal", internalAuthMiddleware);
+app.use("/internal", queueRoutes);
 app.use("/internal/dlq", dlqRoutes);
 
 // 404 handler for unknown routes

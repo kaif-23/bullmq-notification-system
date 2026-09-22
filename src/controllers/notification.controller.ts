@@ -3,44 +3,85 @@ import {
     createNotificationWithOutbox,
     getNotificationById
 } from "../services/notifications.service.js";
+import { fingerprintEmailNotification } from "../utils/notification-request.js";
+import { sendApiError } from "../utils/api-error.js";
+
+const allowedRequestFields = new Set(["email", "type", "data"]);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 export const createEmailNotification = async (req: Request, res: Response) => {
-    const idempotencyKey = req.header("Idempotency-Key");
-    const { email, type } = req.body as {
-        email?: unknown;
-        type?: unknown;
-    };
+    const idempotencyKey = req.header("Idempotency-Key")?.trim();
+    const body = req.body as unknown;
 
     if (
         !idempotencyKey ||
+        idempotencyKey.length > 255 ||
+        !/^\S+$/.test(idempotencyKey)
+    ) {
+        return sendApiError(
+            res,
+            400,
+            "INVALID_IDEMPOTENCY_KEY",
+            "Idempotency-Key must be a non-empty value without whitespace and no longer than 255 characters"
+        );
+    }
+
+    if (!isPlainObject(body)) {
+        return sendApiError(res, 400, "INVALID_REQUEST", "Request body must be a JSON object");
+    }
+
+    const unexpectedFields = Object.keys(body).filter((field) => !allowedRequestFields.has(field));
+    if (unexpectedFields.length > 0) {
+        return sendApiError(
+            res,
+            400,
+            "INVALID_REQUEST",
+            `Unexpected request field: ${unexpectedFields[0]}`
+        );
+    }
+
+    const { email, type, data } = body;
+    if (
         typeof email !== "string" ||
         !/^\S+@\S+\.\S+$/.test(email) ||
         typeof type !== "string" ||
-        type.trim().length === 0
+        type.trim().length === 0 ||
+        type.length > 100 ||
+        !isPlainObject(data)
     ) {
-        return res.status(400).json({
-            message: "Idempotency-Key header and valid email and type fields are required"
-        });
+        return sendApiError(
+            res,
+            400,
+            "INVALID_REQUEST",
+            "email, type, and object data fields are required; email and type must be valid"
+        );
     }
+
+    const request = { email, type, data };
+    const requestFingerprint = fingerprintEmailNotification(request);
 
     const result = await createNotificationWithOutbox(
         idempotencyKey,
-        email,
-        type,
+        request,
+        requestFingerprint,
         res.locals.requestId
     );
 
+    if ("conflict" in result) {
+        return sendApiError(
+            res,
+            409,
+            "IDEMPOTENCY_KEY_REUSED",
+            "Idempotency-Key was already used with a different request"
+        );
+    }
+
     res.status(result.created ? 201 : 200).json({
-        requestId: res.locals.requestId,
-        message: result.created
-            ? "Notification created"
-            : "Notification already exists",
-        notification: {
-            id: result.notification.id,
-            status: result.notification.status,
-            type: result.notification.type,
-            createdAt: result.notification.created_at
-        }
+        notificationId: result.notification.id,
+        status: result.notification.status
     });
 };
 
@@ -48,25 +89,26 @@ export const getNotificationStatus = async (req: Request, res: Response) => {
     const notificationId = Number(req.params.notificationId);
 
     if (!Number.isSafeInteger(notificationId) || notificationId <= 0) {
-        return res.status(400).json({ message: "notificationId must be a positive integer" });
+        return sendApiError(
+            res,
+            400,
+            "INVALID_NOTIFICATION_ID",
+            "notificationId must be a positive integer"
+        );
     }
 
     const notification = await getNotificationById(notificationId);
 
     if (!notification) {
-        return res.status(404).json({ message: "Notification not found" });
+        return sendApiError(res, 404, "NOTIFICATION_NOT_FOUND", "Notification not found");
     }
 
     res.json({
-        requestId: res.locals.requestId,
-        notification: {
-            id: notification.id,
-            email: notification.email,
-            type: notification.type,
-            status: notification.status,
-            attempts: notification.attempts,
-            createdAt: notification.created_at,
-            updatedAt: notification.updated_at
-        }
+        notificationId: notification.id,
+        type: notification.type,
+        status: notification.status,
+        attempts: notification.attempts,
+        createdAt: notification.created_at,
+        updatedAt: notification.updated_at
     });
 };

@@ -1,15 +1,20 @@
 import { PoolClient } from "pg";
 import { db } from "../config/database.js";
 import type { Notification } from "../types/notification.types.js";
+import type { EmailNotificationRequest } from "../utils/notification-request.js";
 
 // ─── Create ───────────────────────────────────────────────────────────────────
 
 export async function createNotificationWithOutbox(
     idempotencyKey: string,
-    email: string,
-    type: string,
+    request: EmailNotificationRequest,
+    requestFingerprint: string,
     requestId?: string
-): Promise<{ notification: Notification; created: boolean }> {
+): Promise<
+    | { notification: Notification; created: true }
+    | { notification: Notification; created: false }
+    | { conflict: true }
+> {
     const client = await db.connect();
 
     try {
@@ -18,13 +23,13 @@ export async function createNotificationWithOutbox(
         const notificationResult = await client.query<Notification>(
             `
             INSERT INTO notifications
-                (idempotency_key, email, type)
+                (idempotency_key, email, type, request_fingerprint)
             VALUES
-                ($1, $2, $3)
+                ($1, $2, $3, $4)
             ON CONFLICT (idempotency_key) DO NOTHING
             RETURNING *
             `,
-            [idempotencyKey, email, type]
+            [idempotencyKey, request.email, request.type, requestFingerprint]
         );
 
         if (notificationResult.rows.length === 0) {
@@ -37,10 +42,40 @@ export async function createNotificationWithOutbox(
                 [idempotencyKey]
             );
 
+            const existing = existingResult.rows[0];
+            if (!existing) {
+                throw new Error("Idempotent notification lookup returned no row");
+            }
+
+            const legacyRequestMatches =
+                existing.request_fingerprint === null &&
+                existing.email === request.email &&
+                existing.type === request.type &&
+                Object.keys(request.data).length === 0;
+
+            if (
+                existing.request_fingerprint !== requestFingerprint &&
+                !legacyRequestMatches
+            ) {
+                await client.query("ROLLBACK");
+                return { conflict: true };
+            }
+
+            if (legacyRequestMatches) {
+                await client.query(
+                    `
+                    UPDATE notifications
+                    SET request_fingerprint = $2
+                    WHERE id = $1
+                    `,
+                    [existing.id, requestFingerprint]
+                );
+            }
+
             await client.query("COMMIT");
 
             return {
-                notification: existingResult.rows[0],
+                notification: existing,
                 created: false
             };
         }
@@ -56,11 +91,12 @@ export async function createNotificationWithOutbox(
             `,
             [
                 notification.id,
-                type,
+                request.type,
                 JSON.stringify({
                     notificationId: notification.id,
-                    email: email,
-                    type: type,
+                    email: request.email,
+                    type: request.type,
+                    data: request.data,
                     requestId
                 })
             ]
@@ -152,7 +188,8 @@ export async function markNotificationSent(
         UPDATE notifications
         SET status = 'sent',
             updated_at = NOW()
-        WHERE id = $1
+                WHERE id = $1
+                    AND status = 'processing'
         `,
         [notificationId]
     );
@@ -166,7 +203,8 @@ export async function markNotificationFailed(
         UPDATE notifications
         SET status = 'failed',
             updated_at = NOW()
-        WHERE id = $1
+                WHERE id = $1
+                    AND status = 'processing'
         `,
         [notificationId]
     );
