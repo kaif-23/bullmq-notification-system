@@ -6,7 +6,7 @@ let running = true;
 let timer: NodeJS.Timeout | undefined;
 let currentCycle = Promise.resolve();
 
-async function runCycle() {
+export async function runRelayOnce(): Promise<void> {
     try {
         const events = await claimPendingOutboxEvents();
 
@@ -52,11 +52,11 @@ async function runCycle() {
     }
 }
 
-async function startRelay() {
+export async function startRelay() {
     console.log("[OUTBOX] Relay started");
 
     while (running) {
-        currentCycle = runCycle();
+        currentCycle = runRelayOnce();
         await currentCycle;
         if (!running) break;
         await new Promise<void>((resolve) => {
@@ -65,7 +65,7 @@ async function startRelay() {
     }
 }
 
-async function shutdown(signal: string) {
+export async function shutdown(signal: string) {
     running = false;
     if (timer) clearTimeout(timer);
     console.log(`[OUTBOX] Received ${signal} — shutting down gracefully...`);
@@ -75,8 +75,3 @@ async function shutdown(signal: string) {
     console.log("[OUTBOX] Relay shut down cleanly");
     process.exit(0);
 }
-
-process.on("SIGTERM", () => void shutdown("SIGTERM"));
-process.on("SIGINT", () => void shutdown("SIGINT"));
-
-void startRelay();

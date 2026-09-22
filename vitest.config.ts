@@ -5,6 +5,8 @@ export default defineConfig({
         include: ["tests/integration/**/*.test.ts"],
         setupFiles: ["tests/setup/lifecycle.ts"],
         fileParallelism: false,
+        maxWorkers: 1,
+        minWorkers: 1,
         restoreMocks: true
     }
 });
