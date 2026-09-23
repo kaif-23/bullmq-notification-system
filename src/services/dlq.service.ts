@@ -7,7 +7,8 @@ import {
 import { createOutboxEvent } from "./outbox.service.js";
 import type { EmailJobData } from "../types/email.types.js";
 import type { ReplayResult, ReplayError } from "../types/dlq.types.js";
-import { logError, logInfo, logWarn } from "../utils/logger.js";
+import { logError, logInfo, logWarn, safeErrorContext } from "../utils/logger.js";
+import { incrementCounter } from "../utils/metrics.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -39,6 +40,7 @@ export const MAX_REPLAYS = 3;
 export async function replayDlqJob(
     dlqJobId: string
 ): Promise<ReplayResult | ReplayError> {
+    incrementCounter("replay_attempts_total");
     // ── Step 1: Find the DLQ job ──────────────────────────────────────────────
 
     const dlqJob = await deadLetterEmailQueue.getJob(dlqJobId);
@@ -172,7 +174,7 @@ export async function replayDlqJob(
         logError("dlq_replay_transaction_failed", {
             dlqJobId,
             notificationId,
-            errorMessage: error instanceof Error ? error.message : String(error)
+            ...safeErrorContext(error)
         });
         return { code: "INTERNAL_ERROR", error };
     } finally {
@@ -194,7 +196,7 @@ export async function replayDlqJob(
         logWarn("dlq_replay_source_remove_failed", {
             dlqJobId,
             notificationId,
-            errorMessage: error instanceof Error ? error.message : String(error)
+            ...safeErrorContext(error)
         });
     }
 

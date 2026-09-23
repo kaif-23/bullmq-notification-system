@@ -5,6 +5,8 @@ import {
 } from "../services/notifications.service.js";
 import { fingerprintEmailNotification } from "../utils/notification-request.js";
 import { sendApiError } from "../utils/api-error.js";
+import { logInfo, logWarn } from "../utils/logger.js";
+import { incrementCounter } from "../utils/metrics.js";
 
 const allowedRequestFields = new Set(["email", "type", "data"]);
 
@@ -71,12 +73,26 @@ export const createEmailNotification = async (req: Request, res: Response) => {
     );
 
     if ("conflict" in result) {
+        logWarn("notification_idempotency_conflict", {
+            requestId: res.locals.requestId,
+            idempotencyKey
+        });
         return sendApiError(
             res,
             409,
             "IDEMPOTENCY_KEY_REUSED",
             "Idempotency-Key was already used with a different request"
         );
+    }
+
+    logInfo(result.created ? "notification_created" : "notification_idempotency_reused", {
+        requestId: res.locals.requestId,
+        notificationId: result.notification.id,
+        idempotencyKey
+    });
+
+    if (result.created) {
+        incrementCounter("notifications_created_total");
     }
 
     res.status(result.created ? 201 : 200).json({

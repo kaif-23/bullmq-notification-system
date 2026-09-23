@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 import { deadLetterEmailQueue } from "../queues/dead-letter-email.queue.js";
 import { replayDlqJob, MAX_REPLAYS } from "../services/dlq.service.js";
 import { sendApiError } from "../utils/api-error.js";
-import { logError, safeErrorContext } from "../utils/logger.js";
+import { logError, logInfo, safeErrorContext } from "../utils/logger.js";
 
 const MAX_DLQ_JOB_ID_LENGTH = 128;
 
@@ -82,7 +82,10 @@ export const retryDlqJob = async (req: Request, res: Response) => {
         );
     }
 
-    console.log(`[DLQ-REPLAY] Replay requested for DLQ job: ${jobId}`);
+    logInfo("dlq_replay_requested", {
+        requestId: res.locals.requestId,
+        dlqJobId: jobId
+    });
 
     const result = await replayDlqJob(jobId);
 

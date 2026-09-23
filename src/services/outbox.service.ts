@@ -1,6 +1,7 @@
 import { PoolClient } from "pg";
 import { db } from "../config/database.js";
 import type { OutboxEvent } from "../types/notification.types.js";
+import { logInfo } from "../utils/logger.js";
 
 // ─── Write ────────────────────────────────────────────────────────────────────
 
@@ -79,6 +80,13 @@ export async function claimPendingOutboxEvents(): Promise<OutboxEvent[]> {
 
         await client.query("COMMIT");
 
+        if (result.rows.length > 0) {
+            logInfo("outbox_events_claimed", {
+                count: result.rows.length,
+                outboxEventIds: result.rows.map((event) => event.id).join(",")
+            });
+        }
+
         return result.rows;
     } catch (error) {
         await client.query("ROLLBACK");
@@ -101,6 +109,13 @@ export async function recoverStuckOutboxEvents(): Promise<{ id: number }[]> {
         RETURNING id
         `
     );
+
+    if (result.rows.length > 0) {
+        logInfo("outbox_stale_claims_recovered", {
+            count: result.rows.length,
+            outboxEventIds: result.rows.map((event) => event.id).join(",")
+        });
+    }
 
     return result.rows;
 }

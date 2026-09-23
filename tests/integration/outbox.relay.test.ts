@@ -87,6 +87,23 @@ describe("transactional outbox and relay", () => {
         });
     });
 
+    it("exposes authenticated outbox status counts", async () => {
+        await createNotification("visibility-order");
+
+        const response = await request(app)
+            .get("/internal/outbox-stats")
+            .set("X-Internal-Api-Key", "phase-4-test-internal-key");
+
+        expect(response.status).toBe(200);
+        expect(response.body).toEqual({
+            pending: expect.any(Number),
+            publishing: expect.any(Number),
+            published: expect.any(Number),
+            stalePublishing: expect.any(Number)
+        });
+        expect(response.body.pending).toBeGreaterThan(0);
+    });
+
     it("claims, publishes, and marks the event published with matching BullMQ data", async () => {
         const { notificationId, requestId } = await createNotification();
         const eventBeforeRelay = await getOutboxEvent(notificationId);

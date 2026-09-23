@@ -4,7 +4,8 @@ import { emailQueue } from "../queues/email.queue.js";
 import { deadLetterEmailQueue } from "../queues/dead-letter-email.queue.js";
 import { markNotificationFailed } from "../services/notifications.service.js";
 import type { EmailJobData } from "../types/email.types.js";
-import { logError, logInfo, logWarn } from "../utils/logger.js";
+import { logError, logInfo, logWarn, safeErrorContext } from "../utils/logger.js";
+import { incrementCounter } from "../utils/metrics.js";
 
 export const RECONCILIATION_INTERVAL_MS = 30_000;
 
@@ -43,7 +44,7 @@ export async function ensureDlqEntry(
             logError("notification_mark_failed_error", {
                 jobId,
                 notificationId: job.data.notificationId,
-                errorMessage: error instanceof Error ? error.message : String(error)
+                ...safeErrorContext(error)
             });
         }
     }
@@ -63,6 +64,7 @@ export async function ensureDlqEntry(
             } satisfies EmailJobData,
             { jobId: dlqJobId }
         );
+        incrementCounter("dlq_entries_total");
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
 
@@ -75,7 +77,7 @@ export async function ensureDlqEntry(
             logError("dlq_entry_create_failed", {
                 jobId,
                 dlqJobId,
-                errorMessage: message
+                ...safeErrorContext(error)
             });
         }
     }
@@ -91,6 +93,15 @@ export async function processFailedJob(
         logWarn("dlq_failed_job_not_found", { jobId });
         return;
     }
+
+    logInfo("email_job_failure_observed", {
+        jobId,
+        notificationId: job.data.notificationId,
+        requestId: job.data.requestId ?? null,
+        attempt: job.attemptsMade,
+        failureCode: job.data.failureCode ?? null,
+        permanentFailure: job.data.permanentFailure ?? false
+    });
 
     const maxAttempts = job.opts.attempts ?? 1;
     if (job.attemptsMade < maxAttempts && !job.data.permanentFailure) {
@@ -123,14 +134,25 @@ export function createEmailQueueEvents(): QueueEvents {
     });
 
     queueEvents.on("completed", ({ jobId }) => {
-        logInfo("email_job_event_completed", { jobId });
+        void Job.fromId<EmailJobData>(emailQueue, jobId).then((job) => {
+            logInfo("email_job_event_completed", {
+                jobId,
+                notificationId: job?.data.notificationId ?? null,
+                requestId: job?.data.requestId ?? null
+            });
+        }).catch((error) => {
+            logError("email_job_event_lookup_failed", {
+                jobId,
+                ...safeErrorContext(error)
+            });
+        });
     });
 
     queueEvents.on("failed", ({ jobId, failedReason }) => {
         void processFailedJob(jobId, failedReason).catch((error) => {
             logError("email_job_failure_handler_crashed", {
                 jobId,
-                errorMessage: error instanceof Error ? error.message : String(error)
+                ...safeErrorContext(error)
             });
         });
     });

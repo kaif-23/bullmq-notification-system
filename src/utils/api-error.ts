@@ -1,4 +1,5 @@
 import { Response } from "express";
+import { logWarn } from "./logger.js";
 
 export class ApiError extends Error {
     constructor(
@@ -17,6 +18,12 @@ export function sendApiError(
     code: string,
     message: string
 ) {
+    logWarn("api_request_rejected", {
+        requestId: res.locals.requestId,
+        statusCode,
+        errorCode: code
+    });
+
     return res.status(statusCode).json({
         error: { code, message },
         requestId: res.locals.requestId

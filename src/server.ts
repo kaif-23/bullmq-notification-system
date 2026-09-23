@@ -1,6 +1,6 @@
 import app from "./app.js";
 import { db } from "./config/database.js";
-import { logError, safeErrorContext } from "./utils/logger.js";
+import { logError, logInfo, safeErrorContext } from "./utils/logger.js";
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -9,10 +9,10 @@ let shuttingDown = false;
 
 db.query("SELECT NOW()")
     .then(() => {
-        console.log("PostgreSQL connected");
+        logInfo("postgresql_connected");
 
         httpServer = app.listen(PORT, () => {
-            console.log(`notification service is running on http://localhost:${PORT}`);
+            logInfo("http_server_started", { port: PORT });
         });
     })
     .catch((error) => {
@@ -23,14 +23,14 @@ db.query("SELECT NOW()")
 async function shutdown(signal: string) {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`[SERVER] Received ${signal} — shutting down gracefully...`);
+    logInfo("http_server_shutdown_started", { signal });
 
     if (httpServer) {
         await new Promise<void>((resolve) => httpServer!.close(() => resolve()));
     }
 
     await db.end();
-    console.log("[SERVER] HTTP server and PostgreSQL pool shut down cleanly");
+    logInfo("http_server_shutdown_completed");
     process.exit(0);
 }
 

@@ -6,7 +6,7 @@ import {
     reconcileExhaustedJobs,
     RECONCILIATION_INTERVAL_MS
 } from "./email.events.js";
-import { logError, safeErrorContext } from "../utils/logger.js";
+import { logError, logInfo, safeErrorContext } from "../utils/logger.js";
 
 const emailQueueEvents = createEmailQueueEvents();
 const reconciliationTimer = setInterval(() => {
@@ -15,7 +15,7 @@ const reconciliationTimer = setInterval(() => {
     });
 }, RECONCILIATION_INTERVAL_MS);
 
-console.log("[EVENT] Email queue event listener started");
+logInfo("email_queue_events_started");
 
 let shuttingDown = false;
 
@@ -23,12 +23,12 @@ async function shutdown(signal: string) {
     if (shuttingDown) return;
     shuttingDown = true;
     clearInterval(reconciliationTimer);
-    console.log(`[EVENT] Received ${signal} — shutting down gracefully...`);
+    logInfo("email_queue_events_shutdown_started", { signal });
     await emailQueueEvents.close();
     await emailQueue.close();
     await deadLetterEmailQueue.close();
     await db.end();
-    console.log("[EVENT] Event listener shut down cleanly");
+    logInfo("email_queue_events_shutdown_completed");
     process.exit(0);
 }
 

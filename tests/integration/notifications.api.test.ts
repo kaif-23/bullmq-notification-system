@@ -259,6 +259,7 @@ describe("notification HTTP API", () => {
         const endpoints = [
             ["get", "/internal/queue-stats", 200],
             ["get", "/internal/queue-jobs", 200],
+            ["get", "/internal/outbox-stats", 200],
             ["get", "/internal/dlq", 200],
             ["get", "/internal/dlq/missing-job", 404],
             ["post", "/internal/dlq/missing-job/retry", 404]

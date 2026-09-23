@@ -11,7 +11,24 @@ import type {
     EmailSendRequest
 } from "../types/email-provider.types.js";
 import type { EmailJobData } from "../types/email.types.js";
-import { logError, logInfo } from "../utils/logger.js";
+import { logError, logInfo, safeErrorContext } from "../utils/logger.js";
+import { incrementCounter, observeTiming } from "../utils/metrics.js";
+
+function providerName(provider: EmailProvider): "simulated" | "resend" | "other" {
+    const name = provider.constructor.name.toLowerCase();
+    if (name.includes("resend")) return "resend";
+    if (name.includes("simulated")) return "simulated";
+    return "other";
+}
+
+function providerErrorCategory(code: string): string {
+    if (code.includes("TIMEOUT")) return "timeout";
+    if (code.includes("NETWORK")) return "network";
+    if (code.includes("TEMPORARY")) return "temporary";
+    if (code.includes("AUTHENTICATION")) return "authentication";
+    if (code.includes("INVALID_REQUEST")) return "invalid_request";
+    return "unknown";
+}
 
 export async function processEmailJob(
     job: Job<EmailJobData>,
@@ -20,6 +37,8 @@ export async function processEmailJob(
     const start = Date.now();
     const attempt = job.attemptsMade + 1;
     const maxAttempts = job.opts.attempts ?? 1;
+    const selectedProvider = providerName(provider);
+    let providerStart = 0;
 
     logInfo("email_job_started", {
         jobId: job.id,
@@ -56,7 +75,11 @@ export async function processEmailJob(
             to: job.data.email,
             idempotencyKey: providerKey
         };
+        providerStart = Date.now();
         const result = await provider.send(emailRequest);
+        observeTiming("provider_request_duration", Date.now() - providerStart, {
+            provider: selectedProvider
+        });
 
         if (result.status === "skipped" && result.reason === "already_processing") {
             logInfo("email_job_retryable_skip", {
@@ -79,6 +102,7 @@ export async function processEmailJob(
         }
 
         await markNotificationSent(job.data.notificationId);
+        incrementCounter("notifications_sent_total");
 
         logInfo("email_job_completed", {
             jobId: job.id,
@@ -95,8 +119,29 @@ export async function processEmailJob(
             maxAttempts,
             errorCode: error instanceof EmailProviderError ? error.code : "UNKNOWN_ERROR",
             retryable: error instanceof EmailProviderError ? error.retryable : null,
-            errorMessage: error instanceof Error ? error.message : String(error)
+            ...safeErrorContext(error)
         });
+
+        if (providerStart > 0) {
+            observeTiming("provider_request_duration", Date.now() - providerStart, {
+                provider: selectedProvider
+            });
+        }
+
+        if (error instanceof EmailProviderError) {
+            const labels = {
+                provider: selectedProvider,
+                errorCategory: providerErrorCategory(error.code)
+            } as const;
+            incrementCounter("provider_failures_total", labels);
+            incrementCounter(
+                error.retryable
+                    ? "provider_retryable_failures_total"
+                    : "provider_permanent_failures_total",
+                labels
+            );
+            if (!error.retryable) incrementCounter("notifications_failed_total");
+        }
 
         if (error instanceof EmailProviderError && !error.retryable) {
             await job.updateData({
@@ -108,5 +153,7 @@ export async function processEmailJob(
         }
 
         throw error;
+    } finally {
+        observeTiming("notification_processing_duration", Date.now() - start);
     }
 }
