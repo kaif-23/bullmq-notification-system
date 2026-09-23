@@ -66,24 +66,24 @@ export const getMetrics = async (req: Request, res: Response) => {
     });
 };
 
-    export const getOutboxStats = async (req: Request, res: Response) => {
-        const counts = await db.query<{ status: string; count: number }>(
-            `SELECT status, COUNT(*)::int AS count
+export const getOutboxStats = async (req: Request, res: Response) => {
+    const counts = await db.query<{ status: string; count: number }>(
+        `SELECT status, COUNT(*)::int AS count
              FROM notification_outbox
              GROUP BY status`
-        );
-        const stale = await db.query<{ count: number }>(
-            `SELECT COUNT(*)::int AS count
+    );
+    const stale = await db.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count
              FROM notification_outbox
              WHERE status = 'publishing'
                AND claimed_at < NOW() - INTERVAL '5 minutes'`
-        );
-        const byStatus = new Map(counts.rows.map((row) => [row.status, row.count]));
+    );
+    const byStatus = new Map(counts.rows.map((row) => [row.status, row.count]));
 
-        res.json({
-            pending: byStatus.get("pending") ?? 0,
-            publishing: byStatus.get("publishing") ?? 0,
-            published: byStatus.get("published") ?? 0,
-            stalePublishing: stale.rows[0]?.count ?? 0
-        });
-    };
+    res.json({
+        pending: byStatus.get("pending") ?? 0,
+        publishing: byStatus.get("publishing") ?? 0,
+        published: byStatus.get("published") ?? 0,
+        stalePublishing: stale.rows[0]?.count ?? 0
+    });
+};

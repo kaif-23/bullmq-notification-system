@@ -1,10 +1,10 @@
 import { Router } from "express";
 import { asyncHandler } from "../utils/async-handler.js";
 import {
-	getQueueStats,
-	getQueueJobs,
-	getOutboxStats,
-	getMetrics
+    getQueueStats,
+    getQueueJobs,
+    getOutboxStats,
+    getMetrics
 } from "../controllers/queue.controller.js";
 
 const router = Router();
