@@ -63,6 +63,16 @@ export async function replayDlqJob(
 
     const currentReplayCount = jobData.replayCount ?? 0;
 
+    if (
+        !Number.isSafeInteger(notificationId) ||
+        notificationId <= 0 ||
+        !Number.isSafeInteger(currentReplayCount) ||
+        currentReplayCount < 0
+    ) {
+        logWarn("dlq_replay_invalid_job_data", { dlqJobId });
+        return { code: "INVALID_JOB_DATA" };
+    }
+
     if (currentReplayCount >= MAX_REPLAYS) {
         logWarn("dlq_replay_limit_reached", {
             dlqJobId,

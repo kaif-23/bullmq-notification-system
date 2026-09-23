@@ -23,5 +23,5 @@ coverage/
 .DS_Store
 Thumbs.db
 
-docs/
-!.env.test.example
+docs/*
+.env.test.example

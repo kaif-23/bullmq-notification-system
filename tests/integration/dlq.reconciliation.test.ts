@@ -263,6 +263,29 @@ describe("DLQ, reconciliation, and replay", () => {
         expect(missingResponse.body).toEqual({ message: "DLQ job not found" });
     });
 
+    it("rejects malformed DLQ replay data", async () => {
+        const created = await createNotification("invalid-dlq-data");
+        await deadLetterEmailQueue.add(
+            "account-verification",
+            {
+                ...created.data,
+                notificationId: "not-a-number",
+                replayCount: "not-a-number"
+            } as unknown as EmailJobData,
+            { jobId: `dlq-invalid-data-${created.notificationId}` }
+        );
+
+        const response = await request(app)
+            .post(`/internal/dlq/dlq-invalid-data-${created.notificationId}/retry`)
+            .set("X-Internal-Api-Key", internalApiKey);
+
+        expect(response.status).toBe(400);
+        expect(response.body).toEqual({
+            error: "INVALID_JOB_DATA",
+            message: "DLQ job data is invalid — cannot replay"
+        });
+    });
+
     it("replays through failed to pending, creates an outbox event, relays it, and sends it", async () => {
         const failed = await createFailedNotification("replay-success");
         const before = await db.query<{ count: number }>(

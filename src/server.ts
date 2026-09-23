@@ -1,5 +1,6 @@
 import app from "./app.js";
 import { db } from "./config/database.js";
+import { logError, safeErrorContext } from "./utils/logger.js";
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -15,7 +16,7 @@ db.query("SELECT NOW()")
         });
     })
     .catch((error) => {
-        console.error("PostgreSQL connection failed:", error);
+        logError("postgresql_connection_failed", safeErrorContext(error));
         process.exit(1);
     });
 

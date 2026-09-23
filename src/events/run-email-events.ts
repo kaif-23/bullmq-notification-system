@@ -6,11 +6,12 @@ import {
     reconcileExhaustedJobs,
     RECONCILIATION_INTERVAL_MS
 } from "./email.events.js";
+import { logError, safeErrorContext } from "../utils/logger.js";
 
 const emailQueueEvents = createEmailQueueEvents();
 const reconciliationTimer = setInterval(() => {
     void reconcileExhaustedJobs().catch((error) => {
-        console.error("[DLQ] Reconciliation failed", error);
+        logError("dlq_reconciliation_failed", safeErrorContext(error));
     });
 }, RECONCILIATION_INTERVAL_MS);
 

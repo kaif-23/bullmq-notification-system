@@ -1,6 +1,18 @@
 import { Request, Response } from "express";
 import { deadLetterEmailQueue } from "../queues/dead-letter-email.queue.js";
 import { replayDlqJob, MAX_REPLAYS } from "../services/dlq.service.js";
+import { sendApiError } from "../utils/api-error.js";
+import { logError, safeErrorContext } from "../utils/logger.js";
+
+const MAX_DLQ_JOB_ID_LENGTH = 128;
+
+function isValidDlqJobId(jobId: string): boolean {
+    return (
+        jobId.length > 0 &&
+        jobId.length <= MAX_DLQ_JOB_ID_LENGTH &&
+        /^[A-Za-z0-9:_-]+$/.test(jobId)
+    );
+}
 
 export const listDlqJobs = async (req: Request, res: Response) => {
     const jobs = await deadLetterEmailQueue.getJobs(
@@ -26,6 +38,16 @@ export const listDlqJobs = async (req: Request, res: Response) => {
 
 export const getDlqJob = async (req: Request, res: Response) => {
     const jobId = req.params.jobId as string;
+
+    if (!isValidDlqJobId(jobId)) {
+        return sendApiError(
+            res,
+            400,
+            "INVALID_DLQ_JOB_ID",
+            "DLQ job ID contains invalid characters or is too long"
+        );
+    }
+
     const job = await deadLetterEmailQueue.getJob(jobId);
 
     if (!job) {
@@ -50,6 +72,16 @@ export const getDlqJob = async (req: Request, res: Response) => {
 
 export const retryDlqJob = async (req: Request, res: Response) => {
     const jobId = req.params.jobId as string;
+
+    if (!isValidDlqJobId(jobId)) {
+        return sendApiError(
+            res,
+            400,
+            "INVALID_DLQ_JOB_ID",
+            "DLQ job ID contains invalid characters or is too long"
+        );
+    }
+
     console.log(`[DLQ-REPLAY] Replay requested for DLQ job: ${jobId}`);
 
     const result = await replayDlqJob(jobId);
@@ -73,6 +105,11 @@ export const retryDlqJob = async (req: Request, res: Response) => {
             return res.status(400).json({
                 error: "MISSING_NOTIFICATION_ID",
                 message: "DLQ job has no notificationId — cannot replay"
+            });
+        case "INVALID_JOB_DATA":
+            return res.status(400).json({
+                error: "INVALID_JOB_DATA",
+                message: "DLQ job data is invalid — cannot replay"
             });
         case "MAX_REPLAYS_EXCEEDED":
             return res.status(409).json({
@@ -100,7 +137,10 @@ export const retryDlqJob = async (req: Request, res: Response) => {
                 message: `Notification ${result.notificationId} is already being replayed by a concurrent request`
             });
         case "INTERNAL_ERROR":
-            console.error("[DLQ-REPLAY] Internal error", result.error);
+            logError("dlq_replay_internal_error", {
+                jobId,
+                ...safeErrorContext(result.error)
+            });
             return res.status(500).json({
                 error: "INTERNAL_ERROR",
                 message: "An unexpected error occurred during replay"

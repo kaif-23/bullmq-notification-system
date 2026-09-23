@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { ApiError } from "../utils/api-error.js";
+import { logError, safeErrorContext } from "../utils/logger.js";
 
 export function errorMiddleware(
     err: any,
@@ -7,8 +8,6 @@ export function errorMiddleware(
     res: Response,
     next: NextFunction
 ) {
-    console.error("[Global Error Handler]", err);
-
     const isBodyTooLarge = err?.type === "entity.too.large";
     const isInvalidJson = err instanceof SyntaxError && "body" in err;
     const statusCode = isBodyTooLarge
@@ -27,6 +26,16 @@ export function errorMiddleware(
                 : statusCode >= 500
                     ? "INTERNAL_ERROR"
                     : "REQUEST_ERROR";
+
+    logError("http_request_failed", {
+        method: req.method,
+        path: req.path,
+        requestId: res.locals.requestId,
+        statusCode,
+        errorCode: err instanceof ApiError ? err.code : code,
+        ...safeErrorContext(err)
+    });
+
     const message = isBodyTooLarge
         ? "Request body exceeds the 32 KiB limit"
         : isInvalidJson

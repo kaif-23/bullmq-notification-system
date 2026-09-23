@@ -1,4 +1,11 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { Request, Response, NextFunction } from "express";
+
+function keysMatch(providedKey: string, configuredKey: string): boolean {
+    const providedDigest = createHash("sha256").update(providedKey).digest();
+    const configuredDigest = createHash("sha256").update(configuredKey).digest();
+    return timingSafeEqual(providedDigest, configuredDigest);
+}
 
 export function internalAuthMiddleware(
     req: Request,
@@ -15,7 +22,7 @@ export function internalAuthMiddleware(
 
     const providedKey = req.header("X-Internal-Api-Key");
 
-    if (providedKey !== configuredKey) {
+    if (!providedKey || !keysMatch(providedKey, configuredKey)) {
         return res.status(401).json({
             message: "Invalid internal API credentials"
         });

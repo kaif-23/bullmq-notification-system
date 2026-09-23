@@ -146,6 +146,24 @@ describe("notification HTTP API", () => {
         expect(errorResponse.headers["x-request-id"]).toBe(errorResponse.body.requestId);
     });
 
+    it("rejects oversized request IDs before handling the request", async () => {
+        const response = await request(app)
+            .post("/api/v1/notifications/email")
+            .set("X-Request-Id", "x".repeat(129))
+            .set("Idempotency-Key", uniqueIdempotencyKey("request-id-limit"))
+            .send(validRequest());
+
+        expect(response.status).toBe(400);
+        expect(response.body).toEqual({
+            error: {
+                code: "INVALID_REQUEST_ID",
+                message: "X-Request-Id must contain 1 to 128 visible characters"
+            },
+            requestId: expect.any(String)
+        });
+        expect(response.headers["x-request-id"]).toBe(response.body.requestId);
+    });
+
     it.each([
         ["missing email", { email: undefined }, "INVALID_REQUEST"],
         ["invalid email", { email: "invalid" }, "INVALID_REQUEST"],
@@ -280,6 +298,18 @@ describe("notification HTTP API", () => {
             } finally {
                 process.env.INTERNAL_API_KEY = configuredKey;
             }
+        });
+
+        it("rejects malformed DLQ job IDs before queue lookup", async () => {
+            const response = await request(app)
+                .get("/internal/dlq/invalid%20job")
+                .set("X-Internal-Api-Key", internalApiKey);
+
+            expect(response.status).toBe(400);
+            expect(response.body.error).toEqual({
+                code: "INVALID_DLQ_JOB_ID",
+                message: "DLQ job ID contains invalid characters or is too long"
+            });
         });
     });
 });
