@@ -1,86 +1,36 @@
-# BullMQ Email Notification System
+﻿# BullMQ Email Notification System
 
-A backend email notification system built with **Node.js, TypeScript, PostgreSQL, Redis, and BullMQ** — focused on asynchronous processing, idempotency, retries, failure recovery, and the Transactional Outbox pattern.
+A backend email notification system built with **Node.js, TypeScript, PostgreSQL, Redis, and BullMQ**, demonstrating asynchronous job processing, the Transactional Outbox pattern, idempotency, and at-least-once delivery with failure recovery.
 
 ---
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    Client -->|POST /api/v1/notifications/email| API[Express API]
+    API -->|Atomic write| PG[(PostgreSQL\nOutbox)]
+    PG -->|Poll and claim| Relay[Outbox Relay]
+    Relay -->|Enqueue job| BQ[BullMQ / Redis]
+    BQ -->|Process with retries| Worker[Email Worker]
+    Worker -->|Deliver| Provider[Email Provider]
 ```
-┌─────────────┐
-│  Client API │
-└──────┬──────┘
-       │ HTTP Request
-       ▼
-┌─────────────┐     ┌──────────────────────────┐
-│  Express API │────▶│      PostgreSQL          │
-└─────────────┘     │  ┌────────────────────┐   │
-                    │  │   notifications    │   │
-                    │  ├────────────────────┤   │
-                    │  │ notification_outbox│   │
-                    │  └────────┬───────────┘   │
-                    └───────────┼───────────────┘
-                                │
-                                ▼
-                    ┌───────────────────────┐
-                    │     Outbox Relay      │
-                    └───────────┬───────────┘
-                                │
-                                ▼
-                    ┌───────────────────────┐
-                    │   BullMQ + Redis      │
-                    └───────────┬───────────┘
-                                │
-                    ┌───────────▼───────────┐
-                    │    Email Worker       │
-                    └───────────┬───────────┘
-                                │
-              ┌─────────────────┴──────────────────┐
-              ▼                                     ▼
-  ┌─────────────────────┐             ┌─────────────────────┐
-  │   Resend Provider   │             │    Mock Provider    │
-  └─────────────────────┘             └─────────────────────┘
 
-Failure Flow:
-┌──────────────┐    ┌───────────────┐    ┌──────────┐      ┌────────┐
-│Worker Failure│───▶│ Retry+Backoff │───▶│   DLQ    │───▶ |Replay │
-└──────────────┘    └───────────────┘    └──────────┘      └────────┘
-```
+PostgreSQL holds durable notification state. Redis and BullMQ manage the async job queue. The Transactional Outbox bridges them without a distributed transaction.
 
 ---
 
-## How It Works
+## Features
 
-1. **API** receives an email notification request and persists both the notification and an outbox event to PostgreSQL atomically.
-2. **Outbox Relay** polls for pending outbox events and enqueues them as BullMQ jobs.
-3. **BullMQ + Redis** manages the job queue and scheduling.
-4. **Worker** processes each job and sends the email via the configured provider.
-5. **Retries + Backoff** handle transient failures automatically.
-6. **DLQ** captures exhausted jobs for manual inspection and replay.
-
----
-
-## Key Concepts
-
-| Concept | Description |
-|---|---|
-| **Transactional Outbox** | Atomically write to DB and queue via an outbox table |
-| **At-Least-Once Delivery** | Jobs may run more than once; idempotency prevents duplicates |
-| **Idempotency** | Guards against duplicate API requests and repeated job execution |
-| **Retry & Backoff** | Exponential backoff on transient failures |
-| **Dead-Letter Queue** | Stores permanently failed jobs for replay |
-| **Provider Abstraction** | Swap between Resend and Mock without code changes |
-
-### Email provider selection
-
-The worker uses simulated delivery by default, which is safe for local
-development and tests and does not send real emails. Set
-`EMAIL_PROVIDER=simulated` explicitly for simulated delivery.
-
-For actual email delivery, set `EMAIL_PROVIDER=resend` and provide both
-`RESEND_API_KEY` and `EMAIL_FROM`. Resend configuration is validated only when
-Resend is selected; unsupported provider values and missing Resend settings
-fail safely during worker startup.
+- **Idempotent API** — repeat requests with the same `Idempotency-Key` are deduplicated safely
+- **Transactional Outbox** — notification and outbox event written atomically; no silent drops
+- **Asynchronous processing** — BullMQ workers process jobs independently with concurrency control
+- **Retry and backoff** — automatic exponential backoff on transient failures
+- **Dead-letter queue** — exhausted jobs are captured and can be replayed
+- **Provider abstraction** — swap between Resend and a simulated provider at runtime
+- **Health and readiness endpoints** — liveness and database connectivity checks
+- **Multi-stage Docker image** — non-root user, production dependencies only, migrations bundled
+- **CI/CD** — GitHub Actions builds, tests, and publishes to GHCR on every push to `main`
 
 ---
 
@@ -88,136 +38,90 @@ fail safely during worker startup.
 
 | Layer | Technology |
 |---|---|
-| Runtime | Node.js, TypeScript |
-| API | Express.js |
-| Database | PostgreSQL |
-| Queue | BullMQ, Redis |
-| Email | Resend, Mock Provider |
-| Testing | Vitest (Integration Tests) |
+| Runtime | Node.js 22, TypeScript |
+| API | Express 5 |
+| Queue | BullMQ 6, ioredis 6 |
+| Database | PostgreSQL 16 |
+| Email | Resend, Simulated provider |
+| Testing | Vitest, Supertest |
+| Infrastructure | Docker, Docker Compose, GitHub Actions |
 
 ---
 
 ## Getting Started
 
-```bash
-npm install
-npm run migrate
-```
-
-### Database migrations
-
-`npm run migrate` serializes migration runners with a PostgreSQL advisory lock
-named `bullmq-notification-system:migrations`. The lock covers migration file
-discovery, checksum verification, and application, so if two deployment
-processes start together, one waits and then re-checks the database after the
-first finishes. The lock is released on both success and failure.
-
-Each migration and its `schema_migrations` record are committed in the same
-transaction. A failed migration is rolled back and is not marked as applied.
-Applied migration checksums remain enforced: unchanged files are skipped,
-changed files are rejected, and new files are applied in numeric order. The
-migration entrypoint also closes its PostgreSQL pool on both success and
-failure and exits non-zero after a migration failure.
-
-For compiled production processes, build first and use:
+**Prerequisites**: Docker and Docker Compose.
 
 ```bash
-npm run build
-npm start
-npm run start:worker
-npm run start:relay
-npm run start:events
-npm run migrate:production
-```
+git clone https://github.com/kaif-23/bullmq-notification-system.git
+cd bullmq-notification-system
 
-The build packages the migration SQL files under `dist/migrations`; the
-compiled migration runner resolves them independently of the process working
-directory.
+# Create your local environment file and configure credentials
+cp .env.example .env
 
-### Production environment validation
-
-When `NODE_ENV=production`, startup requires explicit PostgreSQL settings
-(`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME`) and Redis
-settings (`REDIS_HOST` and `REDIS_PORT`). Local hosts, the default `postgres`
-credentials, the default `notification_db` database, missing values, and
-invalid ports are rejected before connections are created. Development and
-test environments retain their existing configuration behavior.
-
-### Docker foundation
-
-The production application image is built with the multi-stage `Dockerfile`.
-It compiles TypeScript, packages migrations under `dist/migrations`, installs
-only production dependencies in the runtime stage, and runs as the non-root
-`node` user. Override the default command to run the separate compiled worker,
-relay, events, or migration entrypoints.
-
-The Redis baseline is pinned separately in `docker/redis.Dockerfile` to
-`redis:7.4.2-bookworm`, compatible with the BullMQ 6.3.4 deployment baseline.
-
-### Local Docker Compose runtime
-
-Compose runs PostgreSQL, Redis, the API, worker, relay, and queue-events
-process as separate services. The local Compose environment uses simulated
-email delivery. Compose reads optional `COMPOSE_DB_USER`,
-`COMPOSE_DB_PASSWORD`, `COMPOSE_DB_NAME`, and `COMPOSE_INTERNAL_API_KEY`
-overrides from the ignored `.env` file. If they are not set, Compose uses
-explicit local-only defaults; never reuse those defaults outside local
-development.
-
-For local overrides, add these variables to `.env` in the repository root:
-
-```env
-COMPOSE_DB_USER=notification_app
-COMPOSE_DB_PASSWORD=choose-a-local-only-password
-COMPOSE_DB_NAME=notification_production
-COMPOSE_INTERNAL_API_KEY=choose-a-local-only-key
-```
-
-The committed `.env.example` contains placeholder values for these optional
-Compose settings. Do not commit `.env`.
-
-```bash
+# Build the image and start infrastructure
 docker compose build
 docker compose up -d postgres redis
+
+# Run database migrations
 docker compose --profile migration run --rm migrations
+
+# Start all application services
 docker compose up -d api worker relay events
 ```
 
-The migration service is one-shot and must complete before starting the
-application services. Compose health dependencies only wait for PostgreSQL and
-Redis health checks; they do not replace the explicit migration step.
+The API is available at `http://localhost:3000`.
 
-The API is available at `http://localhost:3000`. PostgreSQL and Redis use only
-the private `bullmq-network` and are addressed internally as `postgres` and
-`redis`.
+See [`.env.example`](.env.example) for all supported environment variables. Do not commit `.env`.
 
-To submit a local simulated notification:
+---
+
+## API
+
+#### `POST /api/v1/notifications/email`
 
 ```bash
-curl -X POST http://localhost:3000/api/v1/notifications/email `
-  -H "Content-Type: application/json" `
-  -H "Idempotency-Key: compose-demo-1" `
-  -d '{"email":"dev@example.com","type":"compose-demo","data":{"source":"compose"}}'
+curl -X POST http://localhost:3000/api/v1/notifications/email \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: my-unique-key-1" \
+  -d '{"email":"user@example.com","type":"welcome","data":{"name":"Kaif"}}'
 ```
 
-Use the returned `notificationId` with
-`GET /api/v1/notifications/{notificationId}` to inspect its status.
+Returns `201` with `{ "notificationId": 1, "status": "pending" }`.
+Repeat requests with the same key and body return `200` with the existing notification.
 
-Start each process in a separate terminal:
+#### `GET /api/v1/notifications/:notificationId`
 
 ```bash
-npm run dev      # Express API
-npm run worker   # Email worker
-npm run relay    # Outbox relay
-npm run events   # Event listener
+curl http://localhost:3000/api/v1/notifications/1
+```
+
+Returns the current status (`pending`, `processing`, `sent`, or `failed`) and attempt count.
+
+---
+
+## Testing
+
+Integration tests require PostgreSQL and Redis. Copy `.env.test.example` to `.env.test` and configure `TEST_DB_*` and `TEST_REDIS_*` before running locally.
+
+```bash
+npm install
+npm run build   # TypeScript compilation
+npm test        # Full test suite
 ```
 
 ---
 
-## Design Philosophy
+## Docker Image
 
-> **At-least-once processing + idempotency** instead of exactly-once delivery.
+The application image is published to GitHub Container Registry:
 
-- **PostgreSQL** holds durable business state.
-- **Redis / BullMQ** manages ephemeral async job state.
-- Failures are expected and handled gracefully through retries, DLQ, and replay.
+```
+ghcr.io/kaif-23/bullmq-notification-system:latest
+```
+
+```bash
+docker pull ghcr.io/kaif-23/bullmq-notification-system:latest
+```
+
+The image runs as the non-root `node` user. PostgreSQL and Redis must be provided separately — see the Docker Compose setup above.
