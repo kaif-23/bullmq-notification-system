@@ -1,0 +1,15 @@
+.env
+.env.*
+node_modules/
+dist/
+tests/
+coverage/
+.git/
+.github/
+.vscode/
+.idea/
+*.log
+logs/
+*.tsbuildinfo
+Thumbs.db
+.DS_Store

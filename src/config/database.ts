@@ -1,5 +1,8 @@
 import "dotenv/config";
 import { Pool } from "pg";
+import { validateProductionEnvironment } from "./runtime-environment.js";
+
+validateProductionEnvironment();
 
 function positiveInteger(value: string | undefined, fallback: number): number {
     const parsed = Number(value);

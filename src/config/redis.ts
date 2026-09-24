@@ -1,4 +1,7 @@
 import "dotenv/config";
+import { validateProductionEnvironment } from "./runtime-environment.js";
+
+validateProductionEnvironment();
 
 export const redisConnection = {
     host: process.env.REDIS_HOST || "localhost",

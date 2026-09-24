@@ -1,0 +1,117 @@
+x-app-build: &app-build
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: bullmq-notification-system:local
+
+x-app-environment: &app-environment
+  NODE_ENV: production
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_USER: ${COMPOSE_DB_USER:-notification_app}
+  DB_PASSWORD: ${COMPOSE_DB_PASSWORD:-local-only-compose-password}
+  DB_NAME: ${COMPOSE_DB_NAME:-notification_production}
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  EMAIL_PROVIDER: simulated
+  INTERNAL_API_KEY: ${COMPOSE_INTERNAL_API_KEY:-local-only-compose-internal-key}
+  PORT: "3000"
+
+x-infrastructure-dependencies: &infrastructure-dependencies
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_DB: ${COMPOSE_DB_NAME:-notification_production}
+      POSTGRES_USER: ${COMPOSE_DB_USER:-notification_app}
+      POSTGRES_PASSWORD: ${COMPOSE_DB_PASSWORD:-local-only-compose-password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - bullmq-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U notification_app -d notification_production" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    build:
+      context: .
+      dockerfile: docker/redis.Dockerfile
+    image: bullmq-notification-redis:local
+    command: [ "redis-server", "--appendonly", "yes", "--save", "60", "1" ]
+    volumes:
+      - redis_data:/data
+    networks:
+      - bullmq-network
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  migrations:
+    <<: *app-build
+    profiles: [ "migration" ]
+    command: [ "node", "dist/db/run-migrations.js" ]
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - bullmq-network
+
+  api:
+    <<: *app-build
+    command: [ "node", "dist/server.js" ]
+    environment: *app-environment
+    depends_on: *infrastructure-dependencies
+    ports:
+      - "3000:3000"
+    networks:
+      - bullmq-network
+    restart: unless-stopped
+
+  worker:
+    <<: *app-build
+    command: [ "node", "dist/workers/run-email-worker.js" ]
+    environment: *app-environment
+    depends_on: *infrastructure-dependencies
+    networks:
+      - bullmq-network
+    restart: unless-stopped
+
+  relay:
+    <<: *app-build
+    command: [ "node", "dist/workers/run-outbox-relay.js" ]
+    environment: *app-environment
+    depends_on: *infrastructure-dependencies
+    networks:
+      - bullmq-network
+    restart: unless-stopped
+
+  events:
+    <<: *app-build
+    command: [ "node", "dist/events/run-email-events.js" ]
+    environment: *app-environment
+    depends_on: *infrastructure-dependencies
+    networks:
+      - bullmq-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  bullmq-network:
+    driver: bridge

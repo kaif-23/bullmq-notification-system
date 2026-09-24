@@ -6,8 +6,8 @@ export interface EmailProviderConfig {
     timeoutMs: number;
 }
 
-function required(name: string): string {
-    const value = process.env[name]?.trim();
+function required(name: string, environment: NodeJS.ProcessEnv): string {
+    const value = environment[name]?.trim();
     if (!value) {
         throw new Error(`Missing required email provider configuration: ${name}`);
     }
@@ -19,10 +19,12 @@ function positiveInteger(value: string | undefined, fallback: number): number {
     return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-export function loadEmailProviderConfig(): EmailProviderConfig {
+export function loadEmailProviderConfig(
+    environment: NodeJS.ProcessEnv = process.env
+): EmailProviderConfig {
     return {
-        apiKey: required("RESEND_API_KEY"),
-        from: required("EMAIL_FROM"),
-        timeoutMs: positiveInteger(process.env.EMAIL_PROVIDER_TIMEOUT_MS, 3_000)
+        apiKey: required("RESEND_API_KEY", environment),
+        from: required("EMAIL_FROM", environment),
+        timeoutMs: positiveInteger(environment.EMAIL_PROVIDER_TIMEOUT_MS, 3_000)
     };
 }

@@ -1,12 +1,20 @@
 import "dotenv/config";
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { db } from "../config/database.js";
 
-const migrationsDirectory = resolve(
-    process.env.MIGRATIONS_DIR ?? join(process.cwd(), "migrations")
-);
+const moduleDirectory = __dirname;
+const packagedMigrationsDirectory = resolve(moduleDirectory, "../migrations");
+const sourceMigrationsDirectory = resolve(moduleDirectory, "../../migrations");
+const defaultMigrationsDirectory = process.env.MIGRATIONS_DIR
+    ? resolve(process.env.MIGRATIONS_DIR)
+    : existsSync(packagedMigrationsDirectory)
+      ? packagedMigrationsDirectory
+      : sourceMigrationsDirectory;
+
+const migrationLockName = "bullmq-notification-system:migrations";
 
 interface MigrationFile {
     name: string;
@@ -14,14 +22,14 @@ interface MigrationFile {
     checksum: string;
 }
 
-async function readMigrations(): Promise<MigrationFile[]> {
-    const names = (await readdir(migrationsDirectory))
+async function readMigrations(directory: string): Promise<MigrationFile[]> {
+    const names = (await readdir(directory))
         .filter((name) => /^\d+_.+\.sql$/.test(name))
         .sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
 
     const migrations = await Promise.all(
         names.map(async (name) => {
-            const sql = await readFile(join(migrationsDirectory, name), "utf8");
+            const sql = await readFile(join(directory, name), "utf8");
             return {
                 name,
                 sql,
@@ -33,11 +41,28 @@ async function readMigrations(): Promise<MigrationFile[]> {
     return migrations;
 }
 
-export async function runMigrations(pool = db): Promise<void> {
-    const migrations = await readMigrations();
+export interface RunMigrationsOptions {
+    migrationsDirectory?: string;
+}
+
+export async function runMigrations(
+    pool = db,
+    options: RunMigrationsOptions = {}
+): Promise<void> {
     const client = await pool.connect();
+    let lockAcquired = false;
 
     try {
+        // A session-level advisory lock is used because each migration keeps its
+        // existing transaction boundary. The lock therefore spans discovery,
+        // checksum validation, and all migration transactions.
+        await client.query("SELECT pg_advisory_lock(hashtext($1))", [migrationLockName]);
+        lockAcquired = true;
+
+        const migrations = await readMigrations(
+            options.migrationsDirectory ?? defaultMigrationsDirectory
+        );
+
         await client.query("BEGIN");
         try {
             await client.query(`
@@ -89,7 +114,15 @@ export async function runMigrations(pool = db): Promise<void> {
 
         console.log(`[MIGRATE] Complete (${migrations.length} migration file(s))`);
     } finally {
-        client.release();
+        try {
+            if (lockAcquired) {
+                await client.query("SELECT pg_advisory_unlock(hashtext($1))", [
+                    migrationLockName
+                ]);
+            }
+        } finally {
+            client.release();
+        }
     }
 }
 
